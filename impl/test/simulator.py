@@ -163,7 +163,6 @@ class TradingSimulator:
             con.execute("INSERT INTO historicals SELECT * FROM records_df")
             self.logger.info(f"Loaded {len(records)} historical data records")
 
-
     def initialize_portfolio_cash(self) -> None:
         """Initialize portfolio cash for all tickers."""
         con = self._ensure_connection()
@@ -182,7 +181,7 @@ class TradingSimulator:
             f"Initialized portfolio with ₹{self.initial_cash_per_ticker} per ticker for {len(self.tickers)} tickers"
         )
 
-    def _get_portfolio_status(self, ticker: str) -> Tuple[float, bool]:
+    def _get_portfolio_status(self, ticker: str) -> Tuple[Decimal, bool]:
         """Get current cash and active status for a ticker."""
         con = self._ensure_connection()
         result = con.execute(
@@ -195,12 +194,12 @@ class TradingSimulator:
         ).fetchone()
 
         if result:
-            return float(result[0]), result[1]
+            return Decimal(result[0]), result[1]
         print("NO RESULT!")
-        return 0.0, False
+        return Decimal(0.0), False
 
     def _update_portfolio_cash(
-        self, ticker: str, new_cash: float, is_active: bool = True
+        self, ticker: str, new_cash: Decimal, is_active: bool = True
     ) -> None:
         """Update portfolio cash for a ticker."""
         con = self._ensure_connection()
@@ -210,7 +209,7 @@ class TradingSimulator:
             SET available_cash = ?, is_active = ?
             WHERE ticker = ?
         """,
-            [new_cash, is_active, ticker],
+            [float(new_cash), is_active, ticker],
         )
 
     def _log_event(
@@ -253,8 +252,37 @@ class TradingSimulator:
             )
         return 0, None, None
 
+    @staticmethod
+    def _calculate_transaction_charges(trade_value, is_buy: bool = True) -> Decimal:
+        """
+        Calculate total transaction cost for a trade value.
+
+        brokerage: 0.1% bounded between ₹5 and ₹20
+        STT: 0.1%
+        turnover: 0.0001%
+        stamp duty: 0.1% only on buy
+        """
+        tv = Decimal(str(trade_value))
+        brokerage = max(Decimal("5"), min(Decimal("20"), Decimal("0.001") * tv))
+        stt = Decimal("0.001") * tv
+        turnover = Decimal("0.000001") * tv
+        stamp_duty = (Decimal("0.001") * tv) if is_buy else Decimal("0")
+        return brokerage + stt + turnover + stamp_duty
+
+    def _max_affordable_buy_qty(self, cash, price_dec):
+        """Return max integer qty such that qty*price + fees <= cash."""
+        qty = int(cash / price_dec)
+        while qty > 0:
+            trade_val = Decimal(qty) * price_dec
+            fees = self._calculate_transaction_charges(trade_val, is_buy=True)
+            total_cost = trade_val + fees
+            if total_cost <= cash:
+                return qty
+            qty -= 1
+        return 0
+
     def _execute_buy(
-        self, ticker: str, trade_date: date, price: float, stop_loss: float
+        self, ticker: str, trade_date: date, price: Decimal, stop_loss: float
     ) -> None:
         """Execute a BUY transaction."""
         cash, is_active = self._get_portfolio_status(ticker)
@@ -265,7 +293,6 @@ class TradingSimulator:
             )
 
         if cash <= 0:
-            # Deactivate trading for this ticker
             self._update_portfolio_cash(ticker, cash, False)
             self._log_event(
                 trade_date,
@@ -275,50 +302,45 @@ class TradingSimulator:
             )
             return
 
-        # Check if already owns stock
         qty_owned, _, _ = self._get_current_position(ticker)
         if qty_owned > 0:
-            # self._log_event(trade_date, ticker, f"Ignoring BUY decision: already owns {qty_owned} shares", "WARNING")
             return
-        # Calculate quantity to buy (use all available cash)
-        qty_to_buy = int(Decimal(cash) / Decimal(price))
+
+        qty_to_buy = self._max_affordable_buy_qty(cash, price)
         if qty_to_buy <= 0:
-            # self._log_event(trade_date, ticker, f"Cannot buy: insufficient cash (₹{cash:.2f}) for price ₹{price:.2f}", "WARNING")
             return
 
-        total_cost = qty_to_buy * Decimal(price)
-        remaining_cash = Decimal(cash) - total_cost
+        total_trade_value = Decimal(qty_to_buy) * price
+        buy_fees = self._calculate_transaction_charges(total_trade_value, is_buy=True)
+        total_cost = total_trade_value + buy_fees
+        remaining_cash = cash - total_cost
 
-        # Update portfolio cash
-        self._update_portfolio_cash(ticker, float(remaining_cash))
+        self._update_portfolio_cash(ticker, remaining_cash)
 
-        # Add to active trades
         con = self._ensure_connection()
         con.execute(
             """
             INSERT OR REPLACE INTO active_trades (ticker, qty_owned, buy_price, stop_loss_amt)
             VALUES (?, ?, ?, ?)
-        """,
-            [ticker, qty_to_buy, price, stop_loss],
+            """,
+            [ticker, qty_to_buy, float(price), float(stop_loss)],
         )
 
-        # Record transaction
         con.execute(
             """
             INSERT INTO transactions (txn_date, ticker, txn_type, price, qty)
             VALUES (?, ?, 'BUY', ?, ?)
-        """,
-            [trade_date, ticker, price, qty_to_buy],
+            """,
+            [trade_date, ticker, float(price), qty_to_buy],
         )
 
         self._log_event(
             trade_date,
             ticker,
-            f"BUY: {qty_to_buy} shares at ₹{price:.2f}, stop-loss: ₹{stop_loss:.2f}, remaining cash: ₹{remaining_cash:.2f}",
+            f"BUY: {qty_to_buy} shares at ₹{price:.2f}, fees: ₹{buy_fees:.2f}, total cost: ₹{total_cost:.2f}, stop-loss: ₹{Decimal(str(stop_loss)):.2f}, remaining cash: ₹{remaining_cash:.2f}",
         )
 
     def _execute_sell(self, ticker: str, trade_date: date, price: float) -> None:
-        """Execute a SELL transaction."""
         qty_owned, buy_price, _ = self._get_current_position(ticker)
 
         if qty_owned <= 0:
@@ -326,19 +348,18 @@ class TradingSimulator:
                 f"Invalid SELL decision for {ticker}: no shares owned"
             )
 
-        # Calculate proceeds
-        total_proceeds = qty_owned * price
-        cash, is_active = self._get_portfolio_status(ticker)
-        new_cash = cash + total_proceeds
+        total_trade_value = Decimal(qty_owned) * Decimal(price)
+        sell_fees = self._calculate_transaction_charges(total_trade_value, is_buy=False)
+        net_proceeds = total_trade_value - sell_fees
 
-        # Update portfolio cash
+        cash, is_active = self._get_portfolio_status(ticker)
+        new_cash = cash + net_proceeds
+
         self._update_portfolio_cash(ticker, new_cash)
 
-        # Remove from active trades
         con = self._ensure_connection()
         con.execute("DELETE FROM active_trades WHERE ticker = ?", [ticker])
 
-        # Record transaction
         con.execute(
             """
             INSERT INTO transactions (txn_date, ticker, txn_type, price, qty)
@@ -347,11 +368,14 @@ class TradingSimulator:
             [trade_date, ticker, price, qty_owned],
         )
 
-        profit_loss = total_proceeds - (qty_owned * buy_price) if buy_price else 0
+        buy_price_dec = (
+            Decimal(str(buy_price)) if buy_price is not None else Decimal("0")
+        )
+        profit_loss = net_proceeds - (Decimal(qty_owned) * buy_price_dec)
         self._log_event(
             trade_date,
             ticker,
-            f"SELL: {qty_owned} shares at ₹{price:.2f}, proceeds: ₹{total_proceeds:.2f}, P&L: ₹{profit_loss:.2f}, total cash: ₹{new_cash:.2f}",
+            f"SELL: {qty_owned} shares at ₹{price:.2f}, fees: ₹{sell_fees:.2f}, net proceeds: ₹{net_proceeds:.2f}, P&L: ₹{profit_loss:.2f}, total cash: ₹{new_cash:.2f}",
         )
 
     def _update_stop_loss(
@@ -392,12 +416,7 @@ class TradingSimulator:
         qty_owned, buy_price, stop_loss = self._get_current_position(ticker)
 
         if qty_owned > 0 and stop_loss and current_price <= stop_loss:
-            self._log_event(
-                trade_date,
-                ticker,
-                f"Stop-loss triggered at ₹{current_price:.2f} (stop-loss: ₹{stop_loss:.2f})",
-            )
-            self._execute_sell(ticker, trade_date, current_price)
+            self._execute_sell(ticker, trade_date, stop_loss)
             return True
 
         return False
@@ -426,13 +445,15 @@ class TradingSimulator:
         simulation_start = datetime.now()
 
         # Process each trading day
-        for ticker in tqdm(self.tickers[:10]):
+        for ticker in tqdm(self.tickers):
             for trade_date in self.trading_dates:
                 try:
                     # Check if trading is still active for this ticker
                     cash, is_active = self._get_portfolio_status(ticker)
                     if not is_active:
-                        self._log_event(trade_date, ticker, f"Trading inactive for {ticker}")
+                        self._log_event(
+                            trade_date, ticker, f"Trading inactive for {ticker}"
+                        )
                         continue
 
                     # Get current price data
@@ -454,7 +475,11 @@ class TradingSimulator:
 
                     # Check stop-loss first (using low price for worst case)
                     if self._check_stop_loss(ticker, trade_date, low_price):
-                        self._log_event(trade_date, ticker, f"Stop-loss triggered for {ticker} on {trade_date}")
+                        self._log_event(
+                            trade_date,
+                            ticker,
+                            f"Stop-loss triggered for {ticker} on {trade_date}",
+                        )
                         continue  # Position was closed due to stop-loss
 
                     # Get decision from the decision engine
@@ -579,7 +604,8 @@ class TradingSimulator:
 
         # Calculate overall performance
         initial_total_value = len(self.tickers) * self.initial_cash_per_ticker
-        total_return = total_portfolio_value - initial_total_value
+        capital_gains_tax = max(0, 0.2 * (total_portfolio_value - initial_total_value))
+        total_return = total_portfolio_value - initial_total_value - capital_gains_tax
         total_return_pct = (
             (total_return / initial_total_value) * 100
             if initial_total_value > 0

@@ -61,4 +61,4 @@ Also stored for future use:
 
 # Benchmarks
 
-1. Buy on day 1, never sell: +2.32%
+1. Buy on day 1, never sell: +2.32% (6707a87)
