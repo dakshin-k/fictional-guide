@@ -21,13 +21,18 @@ def main():
     project_root = Path(__file__).parent.parent
     data_dir = str(project_root)  # CSV files are in the project root
     schema_path = str(project_root / "impl" / "setup" / "schema.sql")
-    db_path = ":memory:"
 
     parser = argparse.ArgumentParser(description="Trading Simulator Test Runner")
     parser.add_argument(
         "--init-db",
         action="store_true",
         help="Initialize the base DuckDB file from CSVs",
+    )
+    parser.add_argument(
+        '--db-path',
+        type=str,
+        default=':memory:',
+        help='Path to the DuckDB database file (default: in-memory)',
     )
     args = parser.parse_args()
     initial_cash_per_ticker = 5000.0
@@ -47,7 +52,7 @@ def main():
     print("=" * 50)
     print(f"Data directory: {data_dir}")
     print(f"Schema path: {schema_path}")
-    print(f"DB path: {db_path}")
+    print(f"DB path: {args.db_path}")
     print(f"Initial cash per ticker: {initial_cash_per_ticker}")
     print()
 
@@ -55,7 +60,7 @@ def main():
         # Run the simulation
         results = run_simulation_from_files(
             schema_path=schema_path,
-            db_path=db_path,
+            db_path=args.db_path,
             initial_cash_per_ticker=initial_cash_per_ticker,
         )
 

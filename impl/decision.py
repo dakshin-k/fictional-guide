@@ -15,7 +15,12 @@ class Decision:
         self.stop_loss = stop_loss
 
 
-def get_decision(con: duckdb.DuckDBPyConnection, ticker: str, date: str) -> Decision:
+def get_decision(
+    con: duckdb.DuckDBPyConnection,
+    ticker: str,
+    date: str,
+    breakout_streak: int = 3,
+) -> Decision:
     
     """
     Determine trading decision at the start of the trading day.
@@ -23,13 +28,20 @@ def get_decision(con: duckdb.DuckDBPyConnection, ticker: str, date: str) -> Deci
     This uses only information available up to the previous trading day
     (for breakout confirmation) and the current day's open.
 
+    Parameters:
+    - breakout_streak_required: number of consecutive gap-open breakouts to wait for
+      before acting (default 3).
+
     Rules:
     - Box High is max(close) over the previous `box_lookback` days (excluding today).
     - Gap-open breakout only: today's open > box_high * (1 + breakout_buffer).
-    - If breakout is detected and no current position: BUY at today's open,
-      with initial stop-loss = open * (1 - stop_pct).
+    - React only on the N-th consecutive gap-open breakout when not in a position.
+    - If breakout streak reaches `breakout_streak_required` and no current position:
+      BUY at today's open, with initial stop-loss = open * (1 - stop_pct),
+      and reset streak to 0.
     - If holding a position: UPDATE_STOP_LOSS when highest_high since entry increases,
       new stop-loss = highest_high * (1 - stop_pct).
+    - Non-breakout days reset the breakout streak to 0 when not in a position.
     - Stop-loss SELL is handled by the simulator before calling this function.
     """
     repo = DataRepository(con)
@@ -37,7 +49,7 @@ def get_decision(con: duckdb.DuckDBPyConnection, ticker: str, date: str) -> Deci
     # Configurable parameters
     box_lookback = 5
     breakout_buffer = 0.01  # 1% above box high
-    stop_pct = 0.05  # 5% trailing stop
+    stop_pct = 0.1
 
     # Fetch current day (t) price for open
     day_price = repo.get_day_price(ticker, date)
@@ -65,6 +77,8 @@ def get_decision(con: duckdb.DuckDBPyConnection, ticker: str, date: str) -> Deci
     # No position: evaluate gap-open breakout based on prior box and today's open
     closes = repo.get_recent_closes(ticker, date, box_lookback)
     if not closes:
+        # Without recent closes we can't form a box; reset streak
+        repo.set_breakout_streak(ticker, 0)
         return Decision("NO_OP")
 
     box_high = max(closes)
@@ -73,7 +87,17 @@ def get_decision(con: duckdb.DuckDBPyConnection, ticker: str, date: str) -> Deci
     gap_open_breakout = day_price.open > breakout_threshold
 
     if gap_open_breakout:
-        initial_stop = day_price.open * (1 - stop_pct)
-        return Decision("BUY", stop_loss=round(initial_stop, 4))
+        streak = repo.get_breakout_streak(ticker)
+        new_streak = streak + 1
+
+        if new_streak >= breakout_streak:
+            initial_stop = day_price.open * (1 - stop_pct)
+            # Reset the streak upon making a BUY decision
+            repo.set_breakout_streak(ticker, 0)
+            return Decision("BUY", stop_loss=round(initial_stop, 4))
+        else:
+            # Increment streak and wait for subsequent breakouts
+            repo.set_breakout_streak(ticker, new_streak)
+            return Decision("NO_OP")
 
     return Decision("NO_OP")

@@ -655,6 +655,11 @@ class TradingSimulator:
         print(f"Active Tickers:         {active_tickers}/{len(self.tickers)}")
         print(f"Inactive Tickers:       {inactive_tickers}/{len(self.tickers)}")
 
+        print("\n" + "=" * 80)
+        print('Worst performing Stocks: ')
+        for ticker_detail in sorted(ticker_details, key=lambda x: x['total_value'])[:3]:
+            print(f"  {ticker_detail['ticker']}: Value ₹{ticker_detail['total_value']:,.2f}")
+
         if transaction_summary:
             print("\nTransaction Summary:")
             for txn_type, count, total_value in transaction_summary:

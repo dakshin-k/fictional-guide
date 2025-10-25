@@ -21,6 +21,11 @@ class ActiveTrade:
     stop_loss_amt: Optional[float]
 
 
+@dataclass
+class StrategyState:
+    breakout_streak: int
+
+
 class DataRepository:
     def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
         self.con = con
@@ -108,3 +113,26 @@ class DataRepository:
         if not row or row[0] is None:
             return None
         return float(row[0])
+
+    # --- Strategy state (breakout streak) ---
+    def get_breakout_streak(self, ticker: str) -> int:
+        row = self.con.execute(
+            """
+            SELECT breakout_streak
+            FROM strategy_state
+            WHERE ticker = ?
+            """,
+            [ticker],
+        ).fetchone()
+        if not row or row[0] is None:
+            return 0
+        return int(row[0])
+
+    def set_breakout_streak(self, ticker: str, streak: int) -> None:
+        self.con.execute(
+            """
+            INSERT OR REPLACE INTO strategy_state (ticker, breakout_streak)
+            VALUES (?, ?)
+            """,
+            [ticker, streak],
+        )

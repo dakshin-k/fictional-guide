@@ -38,3 +38,9 @@ CREATE TABLE IF NOT EXISTS simulation_log (
     message TEXT NOT NULL,
     log_type VARCHAR NOT NULL DEFAULT 'INFO' -- INFO, WARNING, ERROR
 );
+
+-- Strategy runtime state
+CREATE TABLE IF NOT EXISTS strategy_state (
+    ticker VARCHAR NOT NULL PRIMARY KEY,
+    breakout_streak INTEGER NOT NULL DEFAULT 0
+);
