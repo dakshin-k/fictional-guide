@@ -1,3 +1,4 @@
+from typing import Set
 import sqlite3
 import pandas as pd
 from pathlib import Path
@@ -47,6 +48,7 @@ class TradingSimulator:
         initial_cash_per_ticker: float = 500.0,
         breakout_streak: int = 1,
         darvas_height_pct: float = 0.01,
+        darvas_height_increment_pct: float = 0.0,
     ):
         """
         Initialize the trading simulator.
@@ -56,6 +58,7 @@ class TradingSimulator:
             initial_cash_per_ticker: Starting cash amount per ticker
             breakout_streak: Required consecutive breakouts before BUY
             darvas_height_pct: Darvas box height as fraction of base close
+            darvas_height_increment_pct: Increment to add to height after a loss
         """
         self.db_path = db_path
         self.initial_cash_per_ticker = initial_cash_per_ticker
@@ -65,6 +68,9 @@ class TradingSimulator:
         self.log_messages: List[LogMessage] = []
         self.breakout_streak = breakout_streak
         self.darvas_height_pct = darvas_height_pct
+        self.darvas_height_increment_pct = darvas_height_increment_pct
+        # Per-ticker Darvas height mapping moved to decision module
+        self.loss_carryover_tickers: Set[str] = set()
 
         # Setup logging
         logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -118,6 +124,7 @@ class TradingSimulator:
         # Extract tickers (all columns except Date)
         self.tickers = [col for col in close_df.columns if col != "Date"]
         self.trading_dates = sorted(close_df["Date"].unique())
+
 
         self.logger.info(
             f"Found {len(self.tickers)} tickers and {len(self.trading_dates)} trading days"
@@ -364,7 +371,7 @@ class TradingSimulator:
             f"BUY: {qty_to_buy} shares at ₹{price:.2f}, fees: ₹{buy_fees:.2f}, total cost: ₹{total_cost:.2f}, stop-loss: ₹{Decimal(str(stop_loss)):.2f}, remaining cash: ₹{remaining_cash:.2f}",
         )
 
-    def _execute_sell(self, ticker: str, trade_date: date, price: float) -> None:
+    def _execute_sell(self, ticker: str, trade_date: date, price: float) -> Decimal:
         qty_owned, buy_price, _ = self._get_current_position(ticker)
 
         if qty_owned <= 0:
@@ -401,6 +408,7 @@ class TradingSimulator:
             ticker,
             f"SELL: {qty_owned} shares at ₹{price:.2f}, fees: ₹{sell_fees:.2f}, net proceeds: ₹{net_proceeds:.2f}, P&L: ₹{profit_loss:.2f}, total cash: ₹{new_cash:.2f}",
         )
+        return profit_loss
 
     def _update_stop_loss(
         self, ticker: str, trade_date: date, new_stop_loss: float
@@ -435,15 +443,19 @@ class TradingSimulator:
 
     def _check_stop_loss(
         self, ticker: str, trade_date: date, current_price: float
-    ) -> bool:
+    ) -> Tuple[bool, Optional[Decimal]]:
         """Check if stop-loss should be triggered and execute if needed."""
         qty_owned, buy_price, stop_loss = self._get_current_position(ticker)
 
         if qty_owned > 0 and stop_loss and current_price <= stop_loss:
-            self._execute_sell(ticker, trade_date, stop_loss)
-            return True
+            profit_loss = self._execute_sell(ticker, trade_date, stop_loss)
+            # Optional: log stop-loss trigger
+            self._log_event(trade_date, ticker, f"Stop-loss triggered for {ticker} on {trade_date}")
+            return True, profit_loss
 
-        return False
+        return False, None
+
+    # Height adjustment moved to decision module; simulator no longer updates per-ticker Darvas height.
 
     def run_simulation(self) -> Dict:
         """
@@ -468,8 +480,10 @@ class TradingSimulator:
 
         simulation_start = datetime.now()
 
+
         # Process each trading day
-        for ticker in tqdm(self.tickers):
+        # for ticker in tqdm(self.tickers):
+        for ticker in ['IDEA.NS']:
             for trade_date in self.trading_dates:
                 try:
                     # Check if trading is still active for this ticker
@@ -492,23 +506,30 @@ class TradingSimulator:
                     ).fetchone()
 
                     if not price_data:
-                        # self._log_event(trade_date, ticker, f"No price data for {ticker} on {trade_date}")
                         continue
 
                     open_price, high_price, low_price, close_price = map(Decimal, price_data)
 
                     # Check stop-loss first (using low price for worst case)
-                    if self._check_stop_loss(ticker, trade_date, low_price):
+                    triggered, pl = self._check_stop_loss(ticker, trade_date, low_price)
+                    if triggered:
+                        if pl is not None and pl < Decimal("0"):
+                            self.loss_carryover_tickers.add(ticker)
                         continue  # Position was closed due to stop-loss
 
                     # Get decision from the decision engine
+                    loss_flag = ticker in self.loss_carryover_tickers
                     decision = get_decision(
                         self.con,
                         ticker,
                         str(trade_date),
                         breakout_streak=self.breakout_streak,
-                        darvas_height_pct=self.darvas_height_pct,
+                        default_height_pct=self.darvas_height_pct,
+                        height_increment_pct=self.darvas_height_increment_pct,
+                        loss_occurred=loss_flag,
                     )
+                    if loss_flag:
+                        self.loss_carryover_tickers.discard(ticker)
 
                     # Execute decision
                     if decision.decision == "BUY":
@@ -521,7 +542,9 @@ class TradingSimulator:
                         )
 
                     elif decision.decision == "SELL":
-                        self._execute_sell(ticker, trade_date, open_price)
+                        pl = self._execute_sell(ticker, trade_date, float(open_price))
+                        if pl < Decimal("0"):
+                            self.loss_carryover_tickers.add(ticker)
 
                     elif decision.decision == "UPDATE_STOP_LOSS":
                         if decision.stop_loss is None:
@@ -557,7 +580,6 @@ class TradingSimulator:
         self.logger.info(
             f"Simulation completed in {simulation_duration.total_seconds():.2f} seconds"
         )
-
         return results
 
     def _generate_final_report(self) -> Dict:
@@ -735,6 +757,7 @@ def run_simulation_from_files(
     initial_cash_per_ticker: float = 500.0,
     breakout_streak: int = 1,
     darvas_height_pct: float = 0.01,
+    darvas_height_increment_pct: float = 0.0,
 ) -> Dict:
     source_db_path = Path(__file__).parent / "test_data.sqlite"
     if not source_db_path.exists():
@@ -745,6 +768,7 @@ def run_simulation_from_files(
         initial_cash_per_ticker,
         breakout_streak=breakout_streak,
         darvas_height_pct=darvas_height_pct,
+        darvas_height_increment_pct=darvas_height_increment_pct,
     )
     try:
         simulator.initialize_database(schema_path)
@@ -770,6 +794,8 @@ def run_simulation_from_files(
         con.execute("DELETE FROM active_trades")
         con.execute("DELETE FROM transactions")
         con.execute("DELETE FROM simulation_log")
+
+        # Per-ticker Darvas height mapping is maintained in decision.py
 
         results = simulator.run_simulation()
         con.commit()

@@ -7,6 +7,7 @@ This script runs a complete simulation using the existing yfinance data files.
 import sys
 from pathlib import Path
 import argparse
+import logging
 
 # Add the impl directory to the path so we can import our modules
 sys.path.append(str(Path(__file__).parent / "impl"))
@@ -52,7 +53,24 @@ def main():
         default=0.01,
         help='Darvas box height as a fraction of base close (default: 0.01)',
     )
+    parser.add_argument(
+        '--darvas-height-increment-pct',
+        type=float,
+        default=0.01,
+        help='Increment fraction to add to Darvas height after a loss (default: 0.0)',
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug-level logging output',
+    )
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    )
+
     initial_cash_per_ticker = args.init_cash
 
     if args.init_db:
@@ -73,6 +91,8 @@ def main():
     print(f"DB path: {args.db_path}")
     print(f"Breakout streak: {args.breakout_streak}")
     print(f"Darvas height pct: {args.darvas_height_pct}")
+    print(f"Darvas height increment pct: {args.darvas_height_increment_pct}")
+    print(f"Debug logging: {'ON' if args.debug else 'OFF'}")
     print()
 
     db_path = Path(args.db_path)
@@ -87,6 +107,7 @@ def main():
         initial_cash_per_ticker=initial_cash_per_ticker,
         breakout_streak=args.breakout_streak,
         darvas_height_pct=args.darvas_height_pct,
+        darvas_height_increment_pct=args.darvas_height_increment_pct,
     )
 
     print("\nSimulation completed successfully!")
