@@ -29,13 +29,31 @@ def main():
         help="Initialize the base SQLite file from CSVs",
     )
     parser.add_argument(
+        '--init-cash',
+        type=float,
+        default=500.0,
+        help='Initial cash per ticker (default: 500.0)',
+    )
+    parser.add_argument(
         '--db-path',
         type=str,
         default=':memory:',
         help='Path to the SQLite database file (default: in-memory)',
     )
+    parser.add_argument(
+        '--breakout-streak',
+        type=int,
+        default=1,
+        help='Number of consecutive breakouts required before BUY (default: 1)',
+    )
+    parser.add_argument(
+        '--darvas-height-pct',
+        type=float,
+        default=0.01,
+        help='Darvas box height as a fraction of base close (default: 0.01)',
+    )
     args = parser.parse_args()
-    initial_cash_per_ticker = 5000.0
+    initial_cash_per_ticker = args.init_cash
 
     if args.init_db:
         db_path = str(project_root / "impl" / "test" / "test_data.sqlite")
@@ -53,40 +71,39 @@ def main():
     print(f"Data directory: {data_dir}")
     print(f"Schema path: {schema_path}")
     print(f"DB path: {args.db_path}")
-    print(f"Initial cash per ticker: {initial_cash_per_ticker}")
+    print(f"Breakout streak: {args.breakout_streak}")
+    print(f"Darvas height pct: {args.darvas_height_pct}")
     print()
 
-    try:
-        # Run the simulation
-        results = run_simulation_from_files(
-            schema_path=schema_path,
-            db_path=args.db_path,
-            initial_cash_per_ticker=initial_cash_per_ticker,
-        )
+    db_path = Path(args.db_path)
+    if db_path.is_file():
+        db_path.unlink()
+        print(f"Deleted existing database file: {db_path}")
 
-        print("\nSimulation completed successfully!")
-        print(f"Simulation duration: {results['simulation_duration']:.2f} seconds")
+    # Run the simulation
+    results = run_simulation_from_files(
+        schema_path=schema_path,
+        db_path=args.db_path,
+        initial_cash_per_ticker=initial_cash_per_ticker,
+        breakout_streak=args.breakout_streak,
+        darvas_height_pct=args.darvas_height_pct,
+    )
 
-        # Display key results
-        portfolio = results["portfolio_summary"]
-        print(f"\nKey Results:")
-        print(
-            f"- Total Return: ₹{portfolio['total_return']:,.2f} ({portfolio['total_return_pct']:+.2f}%)"
-        )
-        print(
-            f"- Active Tickers: {portfolio['active_tickers']}/{portfolio['total_tickers']}"
-        )
-        print(f"- Final Portfolio Value: ₹{portfolio['total_portfolio_value']:,.2f}")
+    print("\nSimulation completed successfully!")
+    print(f"Simulation duration: {results['simulation_duration']:.2f} seconds")
 
-        return True
+    # Display key results
+    portfolio = results["portfolio_summary"]
+    print(f"\nKey Results:")
+    print(
+        f"- Total Return: ₹{portfolio['total_return']:,.2f} ({portfolio['total_return_pct']:+.2f}%)"
+    )
+    print(
+        f"- Active Tickers: {portfolio['active_tickers']}/{portfolio['total_tickers']}"
+    )
+    print(f"- Final Portfolio Value: ₹{portfolio['total_portfolio_value']:,.2f}")
 
-    except Exception as e:
-        print(f"Simulation failed with error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
+    return True
 
 if __name__ == "__main__":
     success = main()

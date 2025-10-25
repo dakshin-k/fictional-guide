@@ -63,3 +63,4 @@ Also stored for future use:
 
 1. Buy on day 1, never sell: +2.32% (6707a87)
 2. 3 consecutive breakout days (open > max of last 15 days): +10.29% (22c63c9)
+3. Fancy boxes - +/- 3% of the first day's close with 3 day streak: -8.65%

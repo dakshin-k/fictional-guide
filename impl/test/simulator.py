@@ -42,7 +42,11 @@ class TradingSimulator:
     """
 
     def __init__(
-        self, db_path: str = ":memory:", initial_cash_per_ticker: float = 500.0
+        self,
+        db_path: str = ":memory:",
+        initial_cash_per_ticker: float = 500.0,
+        breakout_streak: int = 1,
+        darvas_height_pct: float = 0.01,
     ):
         """
         Initialize the trading simulator.
@@ -50,6 +54,8 @@ class TradingSimulator:
         Args:
             db_path: Path to SQLite database file (":memory:" for in-memory)
             initial_cash_per_ticker: Starting cash amount per ticker
+            breakout_streak: Required consecutive breakouts before BUY
+            darvas_height_pct: Darvas box height as fraction of base close
         """
         self.db_path = db_path
         self.initial_cash_per_ticker = initial_cash_per_ticker
@@ -57,6 +63,8 @@ class TradingSimulator:
         self.tickers: List[str] = []
         self.trading_dates: List[date] = []
         self.log_messages: List[LogMessage] = []
+        self.breakout_streak = breakout_streak
+        self.darvas_height_pct = darvas_height_pct
 
         # Setup logging
         logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -168,7 +176,7 @@ class TradingSimulator:
                 engine,
                 if_exists="replace",
                 index=False,
-                method="multi",
+                chunksize=max(1, 900 // len(records_df.columns)),
             )
             self.logger.info(f"Loaded {len(records)} historical data records")
 
@@ -190,7 +198,7 @@ class TradingSimulator:
             engine,
             if_exists="replace",
             index=False,
-            method="multi",
+            chunksize=max(1, 900 // len(df.columns)),
         )
 
         self.logger.info(
@@ -491,15 +499,16 @@ class TradingSimulator:
 
                     # Check stop-loss first (using low price for worst case)
                     if self._check_stop_loss(ticker, trade_date, low_price):
-                        self._log_event(
-                            trade_date,
-                            ticker,
-                            f"Stop-loss triggered for {ticker} on {trade_date}",
-                        )
                         continue  # Position was closed due to stop-loss
 
                     # Get decision from the decision engine
-                    decision = get_decision(self.con, ticker, str(trade_date))
+                    decision = get_decision(
+                        self.con,
+                        ticker,
+                        str(trade_date),
+                        breakout_streak=self.breakout_streak,
+                        darvas_height_pct=self.darvas_height_pct,
+                    )
 
                     # Execute decision
                     if decision.decision == "BUY":
@@ -673,7 +682,12 @@ class TradingSimulator:
 
         print("\n" + "=" * 80)
         print('Worst performing Stocks: ')
-        for ticker_detail in sorted(ticker_details, key=lambda x: x['total_value'])[:3]:
+        for ticker_detail in sorted(ticker_details, key=lambda x: x['total_value'])[:10]:
+            print(f"  {ticker_detail['ticker']}: Value ₹{ticker_detail['total_value']:,.2f}")
+    
+        print("\n" + "=" * 80)
+        print('Best performing Stocks: ')
+        for ticker_detail in sorted(ticker_details, key=lambda x: x['total_value'], reverse=True)[:10]:
             print(f"  {ticker_detail['ticker']}: Value ₹{ticker_detail['total_value']:,.2f}")
 
         if transaction_summary:
@@ -716,27 +730,22 @@ def initialize_db_from_files(
 
 
 def run_simulation_from_files(
-    schema_path: str, db_path: str = ":memory:", initial_cash_per_ticker: float = 500.0
+    schema_path: str,
+    db_path: str = ":memory:",
+    initial_cash_per_ticker: float = 500.0,
+    breakout_streak: int = 1,
+    darvas_height_pct: float = 0.01,
 ) -> Dict:
-    """
-    Convenience function to run a complete simulation using an existing test data DB.
-
-    Args:
-        data_dir: Unused in file-backed cloning, used for in-memory fallback initialization
-        schema_path: Path to schema SQL file
-        db_path: Target database path (":memory:" for in-memory)
-        initial_cash_per_ticker: Starting cash per ticker
-
-    Returns:
-        Simulation results dictionary
-    """
-    # Hardcode source test DB path at project root
     source_db_path = Path(__file__).parent / "test_data.sqlite"
     if not source_db_path.exists():
         raise FileNotFoundError(f"Source test database not found: {source_db_path}")
 
-    # Initialize schema, then attach source DB and copy data
-    simulator = TradingSimulator(db_path, initial_cash_per_ticker)
+    simulator = TradingSimulator(
+        db_path,
+        initial_cash_per_ticker,
+        breakout_streak=breakout_streak,
+        darvas_height_pct=darvas_height_pct,
+    )
     try:
         simulator.initialize_database(schema_path)
         con = simulator._ensure_connection()
@@ -763,6 +772,7 @@ def run_simulation_from_files(
         con.execute("DELETE FROM simulation_log")
 
         results = simulator.run_simulation()
+        con.commit()
         return results
     finally:
         simulator.close()

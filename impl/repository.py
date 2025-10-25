@@ -25,6 +25,18 @@ class ActiveTrade:
 class StrategyState:
     breakout_streak: int
 
+# Darvas box representation
+@dataclass
+class DarvasBox:
+    box_id: int
+    ticker: str
+    start_date: date
+    end_date: Optional[date]
+    min_price: float
+    max_price: float
+    base_close: float
+    is_active: bool
+
 
 class DataRepository:
     def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
@@ -135,4 +147,87 @@ class DataRepository:
             VALUES (?, ?)
             """,
             [ticker, streak],
+        )
+
+    # --- Darvas boxes helpers ---
+    def get_earliest_day_close(self, ticker: str) -> Optional[tuple[date, float]]:
+        row = self.con.execute(
+            """
+            SELECT trade_date, close
+            FROM historicals
+            WHERE ticker = ?
+            ORDER BY trade_date ASC
+            LIMIT 1
+            """,
+            [ticker],
+        ).fetchone()
+        if not row:
+            return None
+        return row[0], float(row[1])
+
+    def get_current_darvas_box(self, ticker: str) -> Optional[DarvasBox]:
+        row = self.con.execute(
+            """
+            SELECT box_id, ticker, start_date, end_date, min_price, max_price, base_close, is_active
+            FROM darvas_boxes
+            WHERE ticker = ? AND is_active = 1
+            ORDER BY box_id DESC
+            LIMIT 1
+            """,
+            [ticker],
+        ).fetchone()
+        if not row:
+            return None
+        return DarvasBox(
+            box_id=int(row[0]),
+            ticker=row[1],
+            start_date=row[2],
+            end_date=row[3],
+            min_price=float(row[4]),
+            max_price=float(row[5]),
+            base_close=float(row[6]),
+            is_active=bool(row[7]),
+        )
+
+    def deactivate_active_darvas_box(self, ticker: str, end_date: date) -> None:
+        self.con.execute(
+            """
+            UPDATE darvas_boxes
+            SET is_active = 0, end_date = ?
+            WHERE ticker = ? AND is_active = 1
+            """,
+            [end_date, ticker],
+        )
+
+    def create_darvas_box(self, ticker: str, start_date: date, base_close: float, height_pct: float) -> DarvasBox:
+        min_price = base_close * (1 - height_pct)
+        max_price = base_close * (1 + height_pct)
+        self.con.execute(
+            """
+            INSERT INTO darvas_boxes (ticker, start_date, end_date, min_price, max_price, base_close, is_active)
+            VALUES (?, ?, NULL, ?, ?, ?, 1)
+            """,
+            [ticker, start_date, float(min_price), float(max_price), float(base_close)],
+        )
+        row = self.con.execute("SELECT last_insert_rowid()").fetchone()
+        box_id = int(row[0]) if row and row[0] is not None else 0
+        return DarvasBox(
+            box_id=box_id,
+            ticker=ticker,
+            start_date=start_date,
+            end_date=None,
+            min_price=float(min_price),
+            max_price=float(max_price),
+            base_close=float(base_close),
+            is_active=True,
+        )
+
+    def update_active_box_end_date(self, ticker: str, end_date: date) -> None:
+        self.con.execute(
+            """
+            UPDATE darvas_boxes
+            SET end_date = ?
+            WHERE ticker = ? AND is_active = 1
+            """,
+            [end_date, ticker],
         )

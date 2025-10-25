@@ -44,3 +44,15 @@ CREATE TABLE IF NOT EXISTS strategy_state (
     ticker VARCHAR NOT NULL PRIMARY KEY,
     breakout_streak INTEGER NOT NULL DEFAULT 0
 );
+
+-- Darvas boxes tracking
+CREATE TABLE IF NOT EXISTS darvas_boxes (
+    box_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE,
+    min_price DECIMAL(18,4) NOT NULL,
+    max_price DECIMAL(18,4) NOT NULL,
+    base_close DECIMAL(18,4) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
