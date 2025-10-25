@@ -1,4 +1,4 @@
-import duckdb
+import sqlite3
 import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -7,6 +7,7 @@ import logging
 from decimal import Decimal
 
 from tqdm import tqdm
+from sqlalchemy import create_engine
 
 from setup.setup_db import apply_schema
 from decision import get_decision
@@ -32,7 +33,7 @@ class TradingSimulator:
     Trading simulator that tests the performance of the decisioning system.
 
     Features:
-    - Initializes DuckDB database with schema
+    - Initializes SQLite database with schema
     - Loads yfinance CSV data into database tables
     - Manages portfolio with ₹500 starting budget per ticker
     - Executes trading decisions (BUY/SELL/STOP_LOSS/NO_OP)
@@ -47,12 +48,12 @@ class TradingSimulator:
         Initialize the trading simulator.
 
         Args:
-            db_path: Path to DuckDB database file (":memory:" for in-memory)
+            db_path: Path to SQLite database file (":memory:" for in-memory)
             initial_cash_per_ticker: Starting cash amount per ticker
         """
         self.db_path = db_path
         self.initial_cash_per_ticker = initial_cash_per_ticker
-        self.con: Optional[duckdb.DuckDBPyConnection] = None
+        self.con: Optional[sqlite3.Connection] = None
         self.tickers: List[str] = []
         self.trading_dates: List[date] = []
         self.log_messages: List[LogMessage] = []
@@ -61,16 +62,19 @@ class TradingSimulator:
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         self.logger = logging.getLogger(__name__)
 
-    def _ensure_connection(self) -> duckdb.DuckDBPyConnection:
+    def _ensure_connection(self) -> sqlite3.Connection:
         """Ensure database connection is available and return it."""
         if not self.con:
             raise SimulationException("Database connection not initialized")
         return self.con
 
     def initialize_database(self, schema_path: str) -> None:
-        """Initialize DuckDB database and apply schema."""
-        self.con = duckdb.connect(self.db_path)
+        """Initialize SQLite database and apply schema."""
+        self.con = sqlite3.connect(self.db_path)
+        # Enable foreign key enforcement for SQLite and prep for bulk inserts
+        self.con.execute("PRAGMA foreign_keys = ON")
         apply_schema(self.con, schema_path)
+        self.con.commit()
         self.logger.info(f"Database initialized with schema from {schema_path}")
 
     def load_yfinance_data(self, data_dir: str) -> None:
@@ -157,25 +161,37 @@ class TradingSimulator:
 
         # Insert data into database
         if records:
-            con = self._ensure_connection()
+            engine = create_engine(f"sqlite:///{self.db_path}")
             records_df = pd.DataFrame(records)
-            con.execute("DELETE FROM historicals")  # Clear existing data
-            con.execute("INSERT INTO historicals SELECT * FROM records_df")
+            records_df.to_sql(
+                "historicals",
+                engine,
+                if_exists="replace",
+                index=False,
+                method="multi",
+            )
             self.logger.info(f"Loaded {len(records)} historical data records")
 
     def initialize_portfolio_cash(self) -> None:
         """Initialize portfolio cash for all tickers."""
-        con = self._ensure_connection()
-        con.execute("DELETE FROM portfolio_cash")  # Clear existing data
-
-        for ticker in self.tickers:
-            con.execute(
-                """
-                INSERT INTO portfolio_cash (ticker, available_cash, is_active)
-                VALUES (?, ?, TRUE)
-            """,
-                [ticker, self.initial_cash_per_ticker],
-            )
+        engine = create_engine(f"sqlite:///{self.db_path}")
+        df = pd.DataFrame(
+            [
+                {
+                    "ticker": ticker,
+                    "available_cash": float(self.initial_cash_per_ticker),
+                    "is_active": True,
+                }
+                for ticker in self.tickers
+            ]
+        )
+        df.to_sql(
+            "portfolio_cash",
+            engine,
+            if_exists="replace",
+            index=False,
+            method="multi",
+        )
 
         self.logger.info(
             f"Initialized portfolio with ₹{self.initial_cash_per_ticker} per ticker for {len(self.tickers)} tickers"
@@ -269,11 +285,11 @@ class TradingSimulator:
         stamp_duty = (Decimal("0.001") * tv) if is_buy else Decimal("0")
         return brokerage + stt + turnover + stamp_duty
 
-    def _max_affordable_buy_qty(self, cash, price_dec):
+    def _max_affordable_buy_qty(self, cash: Decimal, price: Decimal) -> int:
         """Return max integer qty such that qty*price + fees <= cash."""
-        qty = int(cash / price_dec)
+        qty = int(cash / price)
         while qty > 0:
-            trade_val = Decimal(qty) * price_dec
+            trade_val = Decimal(qty) * price
             fees = self._calculate_transaction_charges(trade_val, is_buy=True)
             total_cost = trade_val + fees
             if total_cost <= cash:
@@ -471,7 +487,7 @@ class TradingSimulator:
                         # self._log_event(trade_date, ticker, f"No price data for {ticker} on {trade_date}")
                         continue
 
-                    open_price, high_price, low_price, close_price = price_data
+                    open_price, high_price, low_price, close_price = map(Decimal, price_data)
 
                     # Check stop-loss first (using low price for worst case)
                     if self._check_stop_loss(ticker, trade_date, low_price):
@@ -715,7 +731,7 @@ def run_simulation_from_files(
         Simulation results dictionary
     """
     # Hardcode source test DB path at project root
-    source_db_path = Path(__file__).parent / "test_data.duckdb"
+    source_db_path = Path(__file__).parent / "test_data.sqlite"
     if not source_db_path.exists():
         raise FileNotFoundError(f"Source test database not found: {source_db_path}")
 
@@ -724,7 +740,7 @@ def run_simulation_from_files(
     try:
         simulator.initialize_database(schema_path)
         con = simulator._ensure_connection()
-        con.execute(f"ATTACH '{str(source_db_path)}' AS src")
+        con.execute(f"ATTACH DATABASE '{str(source_db_path)}' AS src")
         # Copy historicals content from source DB
         con.execute("DELETE FROM historicals")
         con.execute("INSERT INTO historicals SELECT * FROM src.historicals")

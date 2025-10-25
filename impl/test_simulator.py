@@ -26,19 +26,19 @@ def main():
     parser.add_argument(
         "--init-db",
         action="store_true",
-        help="Initialize the base DuckDB file from CSVs",
+        help="Initialize the base SQLite file from CSVs",
     )
     parser.add_argument(
         '--db-path',
         type=str,
         default=':memory:',
-        help='Path to the DuckDB database file (default: in-memory)',
+        help='Path to the SQLite database file (default: in-memory)',
     )
     args = parser.parse_args()
     initial_cash_per_ticker = 5000.0
 
     if args.init_db:
-        db_path = str(project_root / "impl" / "test" / "test_data.duckdb")
+        db_path = str(project_root / "impl" / "test" / "test_data.sqlite")
         print(f"Initializing base DB at: {db_path}")
         initialize_db_from_files(
             data_dir=data_dir,

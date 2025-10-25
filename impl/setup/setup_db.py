@@ -1,17 +1,15 @@
 from pathlib import Path
-from typing import Optional
-import duckdb
+import sqlite3
 
 
 
-
-
-def apply_schema(con: duckdb.DuckDBPyConnection, sql_path: str | Path) -> None:
+def apply_schema(con: sqlite3.Connection, sql_path: str | Path) -> None:
     path = Path(sql_path)
     if not path.exists():
         raise FileNotFoundError(f"Schema SQL file not found: {path}")
 
     sql = path.read_text(encoding="utf-8")
-    con.execute(sql)
+    # executescript allows multiple statements separated by ';' in SQLite
+    con.executescript(sql)
 
 
