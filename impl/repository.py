@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 from datetime import date
 from typing import Optional
-
-import duckdb
-
+import sqlite3
+import logging
 
 @dataclass
 class PriceData:
@@ -39,7 +38,7 @@ class DarvasBox:
 
 
 class DataRepository:
-    def __init__(self, con: duckdb.DuckDBPyConnection) -> None:
+    def __init__(self, con: sqlite3.Connection) -> None:
         self.con = con
 
     def get_day_price(self, ticker: str, on_date: str) -> Optional[PriceData]:
@@ -83,6 +82,37 @@ class DataRepository:
             [ticker, before_date, lookback],
         ).fetchall()
         return [float(r[0]) for r in rows]
+
+    def get_recent_volumes(self, ticker: str, before_date: str, lookback: int) -> list[float]:
+        rows = self.con.execute(
+            """
+            SELECT volume
+            FROM historicals
+            WHERE ticker = ? AND trade_date < ?
+            ORDER BY trade_date DESC
+            LIMIT ?
+            """,
+            [ticker, before_date, lookback],
+        ).fetchall()
+        return [float(r[0]) for r in rows]
+
+    def get_max_high_lookback(self, ticker: str, before_date: str, lookback: int) -> Optional[float]:
+        row = self.con.execute(
+            """
+            SELECT MAX(high)
+            FROM (
+                SELECT high
+                FROM historicals
+                WHERE ticker = ? AND trade_date < ?
+                ORDER BY trade_date DESC
+                LIMIT ?
+            )
+            """,
+            [ticker, before_date, lookback],
+        ).fetchone()
+        if not row or row[0] is None:
+            return None
+        return float(row[0])
 
     def get_active_trade(self, ticker: str) -> Optional[ActiveTrade]:
         row = self.con.execute(
@@ -200,6 +230,8 @@ class DataRepository:
         )
 
     def create_darvas_box(self, ticker: str, start_date: date, base_close: float, height_pct: float) -> DarvasBox:
+        logger = logging.getLogger(__name__)
+        logger.debug("Creating Darvas box for ticker=%s with height_pct=%.2f", ticker, height_pct)
         min_price = base_close * (1 - height_pct)
         max_price = base_close * (1 + height_pct)
         self.con.execute(

@@ -30,10 +30,16 @@ def main():
         help="Initialize the base SQLite file from CSVs",
     )
     parser.add_argument(
-        '--init-cash',
+        '--wallet-cash',
         type=float,
         default=500.0,
-        help='Initial cash per ticker (default: 500.0)',
+        help='Initial wallet cash X (default: 500.0)',
+    )
+    parser.add_argument(
+        '--invest-cap',
+        type=float,
+        default=10000.0,
+        help='Max cash to invest per stock Y (default: 10000.0)',
     )
     parser.add_argument(
         '--db-path',
@@ -57,7 +63,13 @@ def main():
         '--darvas-height-increment-pct',
         type=float,
         default=0.01,
-        help='Increment fraction to add to Darvas height after a loss (default: 0.0)',
+        help='Increment fraction to add to Darvas height after a loss (default: 0.01)',
+    )
+    parser.add_argument(
+        '--leader-lookback-days',
+        type=int,
+        default=20,
+        help='Lookback window (days) for leader checks (default: 20)',
     )
     parser.add_argument(
         '--debug',
@@ -67,11 +79,9 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
+        level=logging.DEBUG if args.debug else logging.WARN,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
     )
-
-    initial_cash_per_ticker = args.init_cash
 
     if args.init_db:
         db_path = str(project_root / "impl" / "test" / "test_data.sqlite")
@@ -80,7 +90,8 @@ def main():
             data_dir=data_dir,
             schema_path=schema_path,
             db_path=db_path,
-            initial_cash_per_ticker=initial_cash_per_ticker,
+            initial_wallet_cash=args.wallet_cash,
+            max_invest_per_stock=args.invest_cap,
         )
         return True
 
@@ -89,9 +100,12 @@ def main():
     print(f"Data directory: {data_dir}")
     print(f"Schema path: {schema_path}")
     print(f"DB path: {args.db_path}")
+    print(f"Wallet cash X: {args.wallet_cash}")
+    print(f"Invest cap Y: {args.invest_cap}")
     print(f"Breakout streak: {args.breakout_streak}")
     print(f"Darvas height pct: {args.darvas_height_pct}")
     print(f"Darvas height increment pct: {args.darvas_height_increment_pct}")
+    print(f"Leader lookback days: {args.leader_lookback_days}")
     print(f"Debug logging: {'ON' if args.debug else 'OFF'}")
     print()
 
@@ -104,25 +118,16 @@ def main():
     results = run_simulation_from_files(
         schema_path=schema_path,
         db_path=args.db_path,
-        initial_cash_per_ticker=initial_cash_per_ticker,
+        initial_wallet_cash=args.wallet_cash,
+        max_invest_per_stock=args.invest_cap,
         breakout_streak=args.breakout_streak,
         darvas_height_pct=args.darvas_height_pct,
         darvas_height_increment_pct=args.darvas_height_increment_pct,
+        leader_lookback_days=args.leader_lookback_days,
     )
 
-    print("\nSimulation completed successfully!")
-    print(f"Simulation duration: {results['simulation_duration']:.2f} seconds")
-
-    # Display key results
-    portfolio = results["portfolio_summary"]
-    print(f"\nKey Results:")
-    print(
-        f"- Total Return: ₹{portfolio['total_return']:,.2f} ({portfolio['total_return_pct']:+.2f}%)"
-    )
-    print(
-        f"- Active Tickers: {portfolio['active_tickers']}/{portfolio['total_tickers']}"
-    )
-    print(f"- Final Portfolio Value: ₹{portfolio['total_portfolio_value']:,.2f}")
+    print("\nSimulation complete. Summary:")
+    print(results.get('portfolio_summary', {}))
 
     return True
 

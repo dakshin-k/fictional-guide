@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS portfolio_cash (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+-- New wallet table for global cash management
+CREATE TABLE IF NOT EXISTS wallet (
+    available_cash DECIMAL(18,4) NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS simulation_log (
     log_date DATE NOT NULL,
     ticker VARCHAR NOT NULL,

@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "cwd": "${workspaceFolder}",
+            "name": "Trading Simulator",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/impl/test_simulator.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--debug",
+                "--db-path",
+                "fancy-boxes.sqlite",
+                "--breakout-streak",
+                "2"
+            ]
+        }
+    ]
+}

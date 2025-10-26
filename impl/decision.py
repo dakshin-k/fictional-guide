@@ -24,6 +24,7 @@ def get_decision(
     con: sqlite3.Connection,
     ticker: str,
     date: str,
+    leader_lookback_days: int,
     breakout_streak: int = 1,
     default_height_pct: float = 0.01,
     height_increment_pct: float = 0.0,
@@ -56,9 +57,6 @@ def get_decision(
         current_height = current_height + height_increment_pct
     _height_pct_by_ticker[ticker] = current_height
 
-    # Configurable parameter
-    stop_pct = 0.1
-
     # Fetch current day (t) price for open
     day_price = repo.get_day_price(ticker, date)
     if not day_price:
@@ -76,6 +74,8 @@ def get_decision(
         earliest_date, earliest_close = earliest
         box = repo.create_darvas_box(ticker, earliest_date, earliest_close, current_height)
 
+    # logger.verbose(f"{date}: [BOX] id={box.box_id} box.start_date={box.start_date} base_close={box.base_close:.4f} height_pct={current_height:.4f} min_price={box.min_price:.4f} max_price={box.max_price:.4f}")
+
     open_price = float(day_price.open)
 
     active = repo.get_active_trade(ticker)
@@ -89,7 +89,6 @@ def get_decision(
             if new_stop > current_stop:
                 logger.debug(f"{date}: [UPDATE_STOP_LOSS] Price above box; new stop {new_stop:.4f} > current {current_stop:.4f} for {ticker}")
                 return Decision("UPDATE_STOP_LOSS", stop_loss=round(new_stop, 4))
-        logger.debug(f"{date}: [NO_OP] Holding position; no breakout or stop update for {ticker}")
         return Decision("NO_OP")
 
     # Not in a position: evaluate Darvas box behavior
@@ -107,14 +106,36 @@ def get_decision(
     # Within box -> extend end date and NO_OP
     if box.min_price <= open_price <= box.max_price:
         repo.update_active_box_end_date(ticker, day_price.trade_date)
-        logger.debug(f"{date}: [NO_OP] Open {open_price:.4f} within box [{box.min_price:.4f}, {box.max_price:.4f}]; extend end_date for {ticker}")
+        # logger.debug(f"{date}: [NO_OP] Open {open_price:.4f} within box [{box.min_price:.4f}, {box.max_price:.4f}]; extend end_date for {ticker}")
         return Decision("NO_OP")
 
     # Above box -> breakout handling
     if open_price > box.max_price:
         streak = repo.get_breakout_streak(ticker)
         new_streak = streak + 1
-        if new_streak >= breakout_streak:
+
+        # Leader lookback gating conditions for BUY
+        allow_buy = True
+        if leader_lookback_days and leader_lookback_days > 0:
+            # Price condition: open within 5% of max high in lookback window (prior days)
+            max_high = repo.get_max_high_lookback(ticker, date, leader_lookback_days)
+            price_ok = (max_high is not None) and (open_price >= 0.95 * float(max_high))
+            if price_ok:
+                logger.debug(f"{date}: [GATING] Open {open_price:.4f} within 5% of max high {float(max_high):.4f} for {ticker}")
+
+            # Volume condition: previous day's volume >= 30% above average of lookback (excluding previous day)
+            vols = repo.get_recent_volumes(ticker, date, leader_lookback_days)
+            volume_ok = False
+            if len(vols) > 1:
+                prev_vol = float(vols[0])
+                avg_vol = sum(float(v) for v in vols[1:]) / len(vols[1:])
+                volume_ok = prev_vol >= 1.3 * avg_vol
+                if volume_ok:
+                    logger.debug(f"{date}: [GATING] Volume {prev_vol:.4f} above 30% avg {avg_vol:.4f} for {ticker}")
+
+            allow_buy = price_ok and volume_ok
+
+        if new_streak >= breakout_streak and allow_buy:
             # BUY stop-loss: lower limit of the current (broken) box
             initial_stop = box.min_price
             repo.set_breakout_streak(ticker, 0)
@@ -122,15 +143,15 @@ def get_decision(
             prev_day = repo.get_prev_trading_day(ticker, date)
             repo.deactivate_active_darvas_box(ticker, prev_day if prev_day else box.start_date)
             repo.create_darvas_box(ticker, day_price.trade_date, float(day_price.close), current_height)
-            logger.debug(f"{date}: [BUY] Breakout; streak {new_streak}/{breakout_streak} met; stop {initial_stop:.4f} for {ticker}. New box started at close {day_price.close:.4f}")
+            logger.debug(f"{date}: [BUY] Breakout; streak {new_streak}/{breakout_streak} met and leader gating passed; stop {initial_stop:.4f} for {ticker}. New box started at close {day_price.close:.4f}")
             return Decision("BUY", stop_loss=round(initial_stop, 4))
         else:
+            # Either streak not met or leader gating failed -> treat as NO_OP, start new box, keep updated streak
             repo.set_breakout_streak(ticker, new_streak)
-            # Close the broken box and start a new one anchored to today's close
             prev_day = repo.get_prev_trading_day(ticker, date)
             repo.deactivate_active_darvas_box(ticker, prev_day if prev_day else box.start_date)
             repo.create_darvas_box(ticker, day_price.trade_date, float(day_price.close), current_height)
-            logger.debug(f"{date}: [NO_OP] Breakout but streak {new_streak}/{breakout_streak} not met yet for {ticker}. New box started at close {day_price.close:.4f}")
+            logger.debug(f"{date}: [NO_OP] Breakout but {'streak not met' if new_streak < breakout_streak else 'leader gating failed'} for {ticker}. New box started at close {day_price.close:.4f}")
             return Decision("NO_OP")
 
     logger.debug(f"{date}: [NO_OP] Fallback path for {ticker}")

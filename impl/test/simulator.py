@@ -36,32 +36,39 @@ class TradingSimulator:
     Features:
     - Initializes SQLite database with schema
     - Loads yfinance CSV data into database tables
-    - Manages portfolio with ₹500 starting budget per ticker
+    - Manages a global wallet with starting cash
     - Executes trading decisions (BUY/SELL/STOP_LOSS/NO_OP)
-    - Tracks cash and positions per ticker
+    - Tracks cash and positions
     - Logs events and generates performance reports
     """
 
     def __init__(
         self,
         db_path: str = ":memory:",
-        initial_cash_per_ticker: float = 500.0,
+        initial_wallet_cash: float = 500.0,
+        max_invest_per_stock: float = 10000.0,
         breakout_streak: int = 1,
         darvas_height_pct: float = 0.01,
         darvas_height_increment_pct: float = 0.0,
+        leader_lookback_days: int = 20,
     ):
         """
         Initialize the trading simulator.
 
         Args:
             db_path: Path to SQLite database file (":memory:" for in-memory)
-            initial_cash_per_ticker: Starting cash amount per ticker
+            initial_wallet_cash: Starting cash amount in the global wallet
+            max_invest_per_stock: Maximum cash to invest per BUY when not holding
             breakout_streak: Required consecutive breakouts before BUY
             darvas_height_pct: Darvas box height as fraction of base close
             darvas_height_increment_pct: Increment to add to height after a loss
+            leader_lookback_days: Lookback window (days) for leader checks
         """
         self.db_path = db_path
-        self.initial_cash_per_ticker = initial_cash_per_ticker
+        self.initial_wallet_cash = initial_wallet_cash
+        # Backward-compat to avoid accidental references
+        self.initial_cash_per_ticker = initial_wallet_cash
+        self.max_invest_per_stock = max_invest_per_stock
         self.con: Optional[sqlite3.Connection] = None
         self.tickers: List[str] = []
         self.trading_dates: List[date] = []
@@ -69,6 +76,7 @@ class TradingSimulator:
         self.breakout_streak = breakout_streak
         self.darvas_height_pct = darvas_height_pct
         self.darvas_height_increment_pct = darvas_height_increment_pct
+        self.leader_lookback_days = leader_lookback_days
         # Per-ticker Darvas height mapping moved to decision module
         self.loss_carryover_tickers: Set[str] = set()
 
@@ -212,35 +220,30 @@ class TradingSimulator:
             f"Initialized portfolio with ₹{self.initial_cash_per_ticker} per ticker for {len(self.tickers)} tickers"
         )
 
-    def _get_portfolio_status(self, ticker: str) -> Tuple[Decimal, bool]:
-        """Get current cash and active status for a ticker."""
+    def initialize_wallet_cash(self) -> None:
+        """Initialize the global wallet cash."""
         con = self._ensure_connection()
-        result = con.execute(
-            """
-            SELECT available_cash, is_active 
-            FROM portfolio_cash 
-            WHERE ticker = ?
-        """,
-            [ticker],
+        con.execute("DELETE FROM wallet")
+        con.execute(
+            "INSERT INTO wallet (available_cash) VALUES (?)",
+            [float(self.initial_wallet_cash)],
+        )
+        self.logger.info(
+            f"Initialized wallet with ₹{self.initial_wallet_cash:,.2f}"
+        )
+
+    def _get_wallet_cash(self) -> Decimal:
+        con = self._ensure_connection()
+        row = con.execute(
+            "SELECT available_cash FROM wallet LIMIT 1"
         ).fetchone()
+        return Decimal(row[0]) if row else Decimal("0.0")
 
-        if result:
-            return Decimal(result[0]), result[1]
-        print("NO RESULT!")
-        return Decimal(0.0), False
-
-    def _update_portfolio_cash(
-        self, ticker: str, new_cash: Decimal, is_active: bool = True
-    ) -> None:
-        """Update portfolio cash for a ticker."""
+    def _update_wallet_cash(self, new_cash: Decimal) -> None:
         con = self._ensure_connection()
         con.execute(
-            """
-            UPDATE portfolio_cash 
-            SET available_cash = ?, is_active = ?
-            WHERE ticker = ?
-        """,
-            [float(new_cash), is_active, ticker],
+            "UPDATE wallet SET available_cash = ?",
+            [float(new_cash)],
         )
 
     def _log_event(
@@ -257,9 +260,7 @@ class TradingSimulator:
         )
 
         # Also log to console
-        self.log_messages.append(
-            LogMessage(msg=f"{trade_date} - {ticker}: {message}", level=log_type)
-        )
+        self.logger.info(f"{trade_date} - {ticker}: {message}")
 
     def _get_current_position(
         self, ticker: str
@@ -315,38 +316,34 @@ class TradingSimulator:
     def _execute_buy(
         self, ticker: str, trade_date: date, price: Decimal, stop_loss: float
     ) -> None:
-        """Execute a BUY transaction."""
-        cash, is_active = self._get_portfolio_status(ticker)
-
-        if not is_active:
-            raise SimulationException(
-                f"Cannot buy {ticker}: trading is inactive due to insufficient funds"
-            )
-
-        if cash <= 0:
-            self._update_portfolio_cash(ticker, cash, False)
-            self._log_event(
-                trade_date,
-                ticker,
-                f"Trading deactivated: insufficient cash (₹{cash:.2f})",
-                "WARNING",
-            )
-            return
-
+        """Execute a BUY transaction using wallet and invest cap."""
+        # If we already own, do nothing
         qty_owned, _, _ = self._get_current_position(ticker)
         if qty_owned > 0:
             return
 
-        qty_to_buy = self._max_affordable_buy_qty(cash, price)
+        wallet_cash = self._get_wallet_cash()
+        if wallet_cash <= 0:
+            self._log_event(
+                trade_date,
+                ticker,
+                f"Insufficient wallet cash (₹{wallet_cash:.2f})",
+                "WARNING",
+            )
+            return
+
+        # Budget for this buy is capped at Y and limited by wallet cash
+        budget = min(wallet_cash, Decimal(self.max_invest_per_stock))
+        qty_to_buy = self._max_affordable_buy_qty(budget, price)
         if qty_to_buy <= 0:
             return
 
         total_trade_value = Decimal(qty_to_buy) * price
         buy_fees = self._calculate_transaction_charges(total_trade_value, is_buy=True)
         total_cost = total_trade_value + buy_fees
-        remaining_cash = cash - total_cost
+        new_wallet_cash = wallet_cash - total_cost
 
-        self._update_portfolio_cash(ticker, remaining_cash)
+        self._update_wallet_cash(new_wallet_cash)
 
         con = self._ensure_connection()
         con.execute(
@@ -368,7 +365,7 @@ class TradingSimulator:
         self._log_event(
             trade_date,
             ticker,
-            f"BUY: {qty_to_buy} shares at ₹{price:.2f}, fees: ₹{buy_fees:.2f}, total cost: ₹{total_cost:.2f}, stop-loss: ₹{Decimal(str(stop_loss)):.2f}, remaining cash: ₹{remaining_cash:.2f}",
+            f"BUY: {qty_to_buy} shares at ₹{price:.2f}, fees: ₹{buy_fees:.2f}, total cost: ₹{total_cost:.2f}, stop-loss: ₹{Decimal(str(stop_loss)):.2f}, wallet cash: ₹{new_wallet_cash:.2f}",
         )
 
     def _execute_sell(self, ticker: str, trade_date: date, price: float) -> Decimal:
@@ -383,10 +380,10 @@ class TradingSimulator:
         sell_fees = self._calculate_transaction_charges(total_trade_value, is_buy=False)
         net_proceeds = total_trade_value - sell_fees
 
-        cash, is_active = self._get_portfolio_status(ticker)
-        new_cash = cash + net_proceeds
+        wallet_cash = self._get_wallet_cash()
+        new_wallet_cash = wallet_cash + net_proceeds
 
-        self._update_portfolio_cash(ticker, new_cash)
+        self._update_wallet_cash(new_wallet_cash)
 
         con = self._ensure_connection()
         con.execute("DELETE FROM active_trades WHERE ticker = ?", [ticker])
@@ -406,7 +403,7 @@ class TradingSimulator:
         self._log_event(
             trade_date,
             ticker,
-            f"SELL: {qty_owned} shares at ₹{price:.2f}, fees: ₹{sell_fees:.2f}, net proceeds: ₹{net_proceeds:.2f}, P&L: ₹{profit_loss:.2f}, total cash: ₹{new_cash:.2f}",
+            f"SELL: {qty_owned} shares at ₹{price:.2f}, fees: ₹{sell_fees:.2f}, net proceeds: ₹{net_proceeds:.2f}, P&L: ₹{profit_loss:.2f}, wallet cash: ₹{new_wallet_cash:.2f}",
         )
         return profit_loss
 
@@ -459,7 +456,7 @@ class TradingSimulator:
 
     def run_simulation(self) -> Dict:
         """
-        Run the complete trading simulation.
+        Run the complete trading simulation using a central wallet.
 
         Returns:
             Dictionary containing simulation results and portfolio performance
@@ -480,20 +477,10 @@ class TradingSimulator:
 
         simulation_start = datetime.now()
 
-
         # Process each trading day
-        # for ticker in tqdm(self.tickers):
-        for ticker in ['IDEA.NS']:
+        for ticker in tqdm(self.tickers):
             for trade_date in self.trading_dates:
                 try:
-                    # Check if trading is still active for this ticker
-                    cash, is_active = self._get_portfolio_status(ticker)
-                    if not is_active:
-                        self._log_event(
-                            trade_date, ticker, f"Trading inactive for {ticker}"
-                        )
-                        continue
-
                     # Get current price data
                     con = self._ensure_connection()
                     price_data = con.execute(
@@ -501,7 +488,7 @@ class TradingSimulator:
                         SELECT open, high, low, close
                         FROM historicals
                         WHERE ticker = ? AND trade_date = ?
-                    """,
+                        """,
                         [ticker, trade_date],
                     ).fetchone()
 
@@ -511,7 +498,7 @@ class TradingSimulator:
                     open_price, high_price, low_price, close_price = map(Decimal, price_data)
 
                     # Check stop-loss first (using low price for worst case)
-                    triggered, pl = self._check_stop_loss(ticker, trade_date, low_price)
+                    triggered, pl = self._check_stop_loss(ticker, trade_date, float(low_price))
                     if triggered:
                         if pl is not None and pl < Decimal("0"):
                             self.loss_carryover_tickers.add(ticker)
@@ -527,6 +514,7 @@ class TradingSimulator:
                         default_height_pct=self.darvas_height_pct,
                         height_increment_pct=self.darvas_height_increment_pct,
                         loss_occurred=loss_flag,
+                        leader_lookback_days=self.leader_lookback_days,
                     )
                     if loss_flag:
                         self.loss_carryover_tickers.discard(ticker)
@@ -583,102 +571,133 @@ class TradingSimulator:
         return results
 
     def _generate_final_report(self) -> Dict:
-        """Generate final portfolio performance report."""
+        """Generate final portfolio performance report using wallet and invested cash."""
         con = self._ensure_connection()
 
-        # Get final portfolio values
-        portfolio_summary = con.execute("""
+        # Wallet cash
+        wallet_row = con.execute("SELECT available_cash FROM wallet LIMIT 1").fetchone()
+        wallet_cash = float(wallet_row[0]) if wallet_row else 0.0
+
+        # Active positions and current prices
+        positions = con.execute(
+            """
             SELECT 
-                pc.ticker,
-                pc.available_cash,
-                pc.is_active,
-                COALESCE(active_trades.qty_owned, 0) as qty_owned,
-                active_trades.buy_price,
-                h.close as current_price
-            FROM portfolio_cash pc
-            LEFT JOIN active_trades ON pc.ticker = active_trades.ticker
-            LEFT JOIN historicals h ON pc.ticker = h.ticker 
-                AND h.trade_date = (SELECT MAX(trade_date) FROM historicals WHERE ticker = pc.ticker)
-            ORDER BY pc.ticker
-        """).fetchall()
+                a.ticker,
+                a.qty_owned,
+                a.buy_price,
+                h.close AS current_price
+            FROM active_trades a
+            LEFT JOIN historicals h ON a.ticker = h.ticker 
+                AND h.trade_date = (
+                    SELECT MAX(trade_date) FROM historicals WHERE ticker = a.ticker
+                )
+            ORDER BY a.ticker
+            """
+        ).fetchall()
 
-        total_portfolio_value = 0.0
-        active_tickers = 0
-        inactive_tickers = 0
-        total_cash = 0.0
         total_position_value = 0.0
-
         ticker_details = []
-
-        for row in portfolio_summary:
-            ticker, cash, is_active, qty_owned, buy_price, current_price = row
-
-            cash = float(cash) if cash else 0.0
-            qty_owned = int(qty_owned) if qty_owned else 0
-            buy_price = float(buy_price) if buy_price else 0.0
-            current_price = float(current_price) if current_price else 0.0
-
+        for row in positions:
+            ticker = row[0]
+            qty_owned = int(row[1]) if row[1] else 0
+            buy_price = float(row[2]) if row[2] else 0.0
+            current_price = float(row[3]) if row[3] else 0.0
             position_value = qty_owned * current_price
-            ticker_total_value = cash + position_value
-
-            total_cash += cash
             total_position_value += position_value
-            total_portfolio_value += ticker_total_value
-
-            if is_active:
-                active_tickers += 1
-            else:
-                inactive_tickers += 1
-
             unrealized_pnl = (
                 (current_price - buy_price) * qty_owned
                 if qty_owned > 0 and buy_price > 0
                 else 0.0
             )
-
             ticker_details.append(
                 {
                     "ticker": ticker,
-                    "cash": cash,
                     "qty_owned": qty_owned,
-                    "position_value": position_value,
-                    "total_value": ticker_total_value,
-                    "is_active": is_active,
-                    "unrealized_pnl": unrealized_pnl,
+                    "buy_price": buy_price,
                     "current_price": current_price,
+                    "position_value": position_value,
+                    "unrealized_pnl": unrealized_pnl,
                 }
             )
 
-        # Calculate overall performance
-        initial_total_value = len(self.tickers) * self.initial_cash_per_ticker
-        capital_gains_tax = max(0, 0.2 * (total_portfolio_value - initial_total_value))
-        total_return = total_portfolio_value - initial_total_value - capital_gains_tax
+        total_portfolio_value = wallet_cash + total_position_value
+
+        # Total cash invested (cost basis of active positions)
+        total_invested_row = con.execute(
+            """
+            SELECT COALESCE(SUM(qty_owned * buy_price), 0.0)
+            FROM active_trades
+            """
+        ).fetchone()
+        total_invested_cash = float(total_invested_row[0]) if total_invested_row else 0.0
+
+        # Realized gains for CGT: match each SELL to the latest prior BUY of same ticker
+        realized_rows = con.execute(
+            """
+            SELECT 
+                s.ticker,
+                s.txn_date,
+                s.price AS sell_price,
+                s.qty AS sell_qty,
+                (
+                    SELECT b.price
+                    FROM transactions b
+                    WHERE b.ticker = s.ticker AND b.txn_type = 'BUY' AND b.txn_date <= s.txn_date
+                    ORDER BY b.txn_date DESC
+                    LIMIT 1
+                ) AS buy_price,
+                (
+                    SELECT b.qty
+                    FROM transactions b
+                    WHERE b.ticker = s.ticker AND b.txn_type = 'BUY' AND b.txn_date <= s.txn_date
+                    ORDER BY b.txn_date DESC
+                    LIMIT 1
+                ) AS buy_qty
+            FROM transactions s
+            WHERE s.txn_type = 'SELL'
+            """
+        ).fetchall()
+
+        realized_gains = 0.0
+        for row in realized_rows:
+            sell_price = float(row[2]) if row[2] else 0.0
+            sell_qty = int(row[3]) if row[3] else 0
+            buy_price = float(row[4]) if row[4] else 0.0
+            buy_qty = int(row[5]) if row[5] else 0
+            qty = min(sell_qty, buy_qty) if buy_qty > 0 else sell_qty
+            gain = (sell_price - buy_price) * qty
+            realized_gains += gain
+
+        capital_gains_tax = 0.2 * realized_gains if realized_gains > 0 else 0.0
+        portfolio_value_after_tax = total_portfolio_value - capital_gains_tax
+        total_return = portfolio_value_after_tax - total_invested_cash
         total_return_pct = (
-            (total_return / initial_total_value) * 100
-            if initial_total_value > 0
-            else 0.0
+            (total_return / total_invested_cash) * 100 if total_invested_cash > 0 else 0.0
         )
 
-        # Get transaction summary
-        transaction_summary = con.execute("""
+        # Transaction summary
+        transaction_summary = con.execute(
+            """
             SELECT 
                 txn_type,
                 COUNT(*) as count,
                 SUM(price * qty) as total_value
             FROM transactions
             GROUP BY txn_type
-        """).fetchall()
+            """
+        ).fetchall()
 
         results = {
             "portfolio_summary": {
-                "total_portfolio_value": total_portfolio_value,
-                "total_cash": total_cash,
+                "wallet_cash": wallet_cash,
                 "total_position_value": total_position_value,
-                "initial_value": initial_total_value,
+                "total_portfolio_value": total_portfolio_value,
+                "total_invested_cash": total_invested_cash,
+                "capital_gains_tax": capital_gains_tax,
+                "portfolio_value_after_tax": portfolio_value_after_tax,
                 "total_return": total_return,
                 "total_return_pct": total_return_pct,
-                "active_tickers": active_tickers,
-                "inactive_tickers": inactive_tickers,
+                "active_positions": len(positions),
                 "total_tickers": len(self.tickers),
             },
             "ticker_details": ticker_details,
@@ -692,25 +711,26 @@ class TradingSimulator:
         print("\n" + "=" * 80)
         print("TRADING SIMULATION RESULTS")
         print("=" * 80)
-        print(f"Initial Portfolio Value: ₹{initial_total_value:,.2f}")
-        print(f"Final Portfolio Value:   ₹{total_portfolio_value:,.2f}")
+        print(f"Wallet Cash:            ₹{wallet_cash:,.2f}")
+        print(f"Positions Value:        ₹{total_position_value:,.2f}")
+        print(f"Portfolio Value:        ₹{total_portfolio_value:,.2f}")
+        print(f"Invested Cash:          ₹{total_invested_cash:,.2f}")
+        print(f"Capital Gains Tax:      ₹{capital_gains_tax:,.2f}")
+        print(f"Portfolio After Tax:    ₹{portfolio_value_after_tax:,.2f}")
         print(
             f"Total Return:           ₹{total_return:,.2f} ({total_return_pct:+.2f}%)"
         )
-        print(f"Cash:                   ₹{total_cash:,.2f}")
-        print(f"Positions Value:        ₹{total_position_value:,.2f}")
-        print(f"Active Tickers:         {active_tickers}/{len(self.tickers)}")
-        print(f"Inactive Tickers:       {inactive_tickers}/{len(self.tickers)}")
-
+        print(f"Active Positions:       {len(positions)} / {len(self.tickers)}")
         print("\n" + "=" * 80)
-        print('Worst performing Stocks: ')
-        for ticker_detail in sorted(ticker_details, key=lambda x: x['total_value'])[:10]:
-            print(f"  {ticker_detail['ticker']}: Value ₹{ticker_detail['total_value']:,.2f}")
+
+        print('Worst performing Stocks (by position value): ')
+        for ticker_detail in sorted(ticker_details, key=lambda x: x['position_value'])[:10]:
+            print(f"  {ticker_detail['ticker']}: Position ₹{ticker_detail['position_value']:,.2f}")
     
         print("\n" + "=" * 80)
-        print('Best performing Stocks: ')
-        for ticker_detail in sorted(ticker_details, key=lambda x: x['total_value'], reverse=True)[:10]:
-            print(f"  {ticker_detail['ticker']}: Value ₹{ticker_detail['total_value']:,.2f}")
+        print('Best performing Stocks (by position value): ')
+        for ticker_detail in sorted(ticker_details, key=lambda x: x['position_value'], reverse=True)[:10]:
+            print(f"  {ticker_detail['ticker']}: Position ₹{ticker_detail['position_value']:,.2f}")
 
         if transaction_summary:
             print("\nTransaction Summary:")
@@ -738,15 +758,16 @@ def initialize_db_from_files(
     data_dir: str,
     schema_path: str,
     db_path: str,
-    initial_cash_per_ticker: float,
+    initial_wallet_cash: float,
+    max_invest_per_stock: float,
 ) -> None:
     base_db_path = Path(db_path)
     base_db_path.parent.mkdir(parents=True, exist_ok=True)
-    builder = TradingSimulator(str(base_db_path), initial_cash_per_ticker)
+    builder = TradingSimulator(str(base_db_path), initial_wallet_cash, max_invest_per_stock)
     try:
         builder.initialize_database(schema_path)
         builder.load_yfinance_data(data_dir)
-        builder.initialize_portfolio_cash()
+        builder.initialize_wallet_cash()
     finally:
         builder.close()
 
@@ -754,10 +775,12 @@ def initialize_db_from_files(
 def run_simulation_from_files(
     schema_path: str,
     db_path: str = ":memory:",
-    initial_cash_per_ticker: float = 500.0,
+    initial_wallet_cash: float = 500.0,
+    max_invest_per_stock: float = 10000.0,
     breakout_streak: int = 1,
     darvas_height_pct: float = 0.01,
     darvas_height_increment_pct: float = 0.0,
+    leader_lookback_days: int = 20,
 ) -> Dict:
     source_db_path = Path(__file__).parent / "test_data.sqlite"
     if not source_db_path.exists():
@@ -765,10 +788,12 @@ def run_simulation_from_files(
 
     simulator = TradingSimulator(
         db_path,
-        initial_cash_per_ticker,
+        initial_wallet_cash,
+        max_invest_per_stock,
         breakout_streak=breakout_streak,
         darvas_height_pct=darvas_height_pct,
         darvas_height_increment_pct=darvas_height_increment_pct,
+        leader_lookback_days=leader_lookback_days,
     )
     try:
         simulator.initialize_database(schema_path)
@@ -777,7 +802,6 @@ def run_simulation_from_files(
         # Copy historicals content from source DB
         con.execute("DELETE FROM historicals")
         con.execute("INSERT INTO historicals SELECT * FROM src.historicals")
-        con.execute("INSERT INTO portfolio_cash SELECT * FROM src.portfolio_cash")
 
         # Derive tickers and dates
         tickers_rows = con.execute(
@@ -790,12 +814,11 @@ def run_simulation_from_files(
         ).fetchall()
         simulator.trading_dates = [row[0] for row in dates_rows]
 
-        # Reset simulation tables and initialize portfolio cash
+        # Reset simulation tables
         con.execute("DELETE FROM active_trades")
         con.execute("DELETE FROM transactions")
         con.execute("DELETE FROM simulation_log")
-
-        # Per-ticker Darvas height mapping is maintained in decision.py
+        simulator.initialize_wallet_cash()
 
         results = simulator.run_simulation()
         con.commit()

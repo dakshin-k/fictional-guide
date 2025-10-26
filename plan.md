@@ -64,4 +64,18 @@ Also stored for future use:
 1. Buy on day 1, never sell: +2.32% (6707a87)
 2. 3 consecutive breakout days (open > max of last 15 days): +10.29% (22c63c9)
 3. Fancy boxes - +/- 3% of the first day's close with 3 day streak: -8.65% (e6c65fc)
-4. 
+4. Boxes plus buy only on higher volume + near historical high, + Rs. 10,000 budget per stock
+5. Endgame - box breakout streak, plus increasing heights, plus trigger on higher volume and near historical high
+   1. Lookback 180 days:
+      1. Wallet 1L, cap per stock 5K -> +26.34%
+      2. Wallet 2L, cap per stock 5K -> +102.16%
+      3. Wallet 1L, cap per stock 10K -> -4.54%
+      4. Wallet 2L, cap per stock 10K -> +15.66%
+      5. Wallet 4L, cap per stock 10K -> +81.64%
+    2. Lookback 365 days:
+       1. Wallet 1L, cap per stock 5K -> +165.47%
+       2. Wallet 2L, cap per stock 5K -> +325.21%
+       3. Wallet 1L, cap per stock 10K -> +76.96%
+       4. Wallet 2L, cap per stock 10K -> +148.55%
+       5. Wallet 4L, cap per stock 10K -> +291.74%
+       6. Wallet 1Cr, cap per stock 20K -> +3280.34% 
