@@ -11,7 +11,7 @@ from tqdm import tqdm
 from sqlalchemy import create_engine
 
 from setup.setup_db import apply_schema
-from decision import get_decision
+from buffet.decision import get_decision
 
 
 class SimulationException(Exception):
