@@ -65,7 +65,7 @@ Also stored for future use:
 2. 3 consecutive breakout days (open > max of last 15 days): +10.29% (22c63c9)
 3. Fancy boxes - +/- 3% of the first day's close with 3 day streak: -8.65% (e6c65fc)
 4. Boxes plus buy only on higher volume + near historical high, + Rs. 10,000 budget per stock
-5. Endgame - box breakout streak, plus increasing heights, plus trigger on higher volume and near historical high
+5. Endgame - box breakout streak, plus increasing heights, plus trigger on higher volume and near historical high (4d6131f)
    1. Lookback 180 days:
       1. Wallet 1L, cap per stock 5K -> +26.34%
       2. Wallet 2L, cap per stock 5K -> +102.16%
