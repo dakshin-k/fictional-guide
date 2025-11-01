@@ -1,8 +1,11 @@
+from decimal import Decimal
+from typing import List
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Optional, Sequence
 import logging
 from django.db import connection
+
 
 @dataclass
 class PriceData:
@@ -24,6 +27,7 @@ class ActiveTrade:
 class StrategyState:
     breakout_streak: int
 
+
 # Darvas box representation
 @dataclass
 class DarvasBox:
@@ -35,6 +39,13 @@ class DarvasBox:
     max_price: float
     base_close: float
     is_active: bool
+
+
+@dataclass
+class TradingPlan:
+    ticker: str
+    order_type: str
+    qty: Optional[int] = None
 
 
 class DataRepository:
@@ -89,7 +100,11 @@ class DataRepository:
         if not row:
             return None
         return PriceData(
-            trade_date=row[0], open=float(row[1]), high=float(row[2]), low=float(row[3]), close=float(row[4])
+            trade_date=row[0],
+            open=float(row[1]),
+            high=float(row[2]),
+            low=float(row[3]),
+            close=float(row[4]),
         )
 
     def get_prev_trading_day(self, ticker: str, before_date: str) -> Optional[date]:
@@ -124,7 +139,9 @@ class DataRepository:
             return None
         return float(row[0])
 
-    def get_recent_closes(self, ticker: str, before_date: str, lookback: int) -> list[float]:
+    def get_recent_closes(
+        self, ticker: str, before_date: str, lookback: int
+    ) -> list[float]:
         rows = self._fetchall(
             """
             SELECT close
@@ -137,7 +154,9 @@ class DataRepository:
         )
         return [float(r[0]) for r in rows]
 
-    def get_recent_volumes(self, ticker: str, before_date: str, lookback: int) -> list[float]:
+    def get_recent_volumes(
+        self, ticker: str, before_date: str, lookback: int
+    ) -> list[float]:
         rows = self._fetchall(
             """
             SELECT volume
@@ -150,7 +169,9 @@ class DataRepository:
         )
         return [float(r[0]) for r in rows]
 
-    def get_max_high_lookback(self, ticker: str, before_date: str, lookback: int) -> Optional[float]:
+    def get_max_high_lookback(
+        self, ticker: str, before_date: str, lookback: int
+    ) -> Optional[float]:
         row = self._fetchone(
             """
             SELECT MAX(high)
@@ -197,7 +218,9 @@ class DataRepository:
             return None
         return row[0]
 
-    def get_high_since(self, ticker: str, start_date: str, end_date: str) -> Optional[float]:
+    def get_high_since(
+        self, ticker: str, start_date: str, end_date: str
+    ) -> Optional[float]:
         row = self._fetchone(
             """
             SELECT MAX(high)
@@ -293,9 +316,13 @@ class DataRepository:
         except Exception:
             pass
 
-    def create_darvas_box(self, ticker: str, start_date: date, base_close: float, height_pct: float) -> DarvasBox:
+    def create_darvas_box(
+        self, ticker: str, start_date: date, base_close: float, height_pct: float
+    ) -> DarvasBox:
         logger = logging.getLogger(__name__)
-        logger.debug("Creating Darvas box for ticker=%s with height_pct=%.2f", ticker, height_pct)
+        logger.debug(
+            "Creating Darvas box for ticker=%s with height_pct=%.2f", ticker, height_pct
+        )
         min_price = base_close * (1 - height_pct)
         max_price = base_close * (1 + height_pct)
         cur = self._execute(
@@ -306,7 +333,9 @@ class DataRepository:
             [ticker, start_date, float(min_price), float(max_price), float(base_close)],
         )
         try:
-            box_id = int(cur.lastrowid) if getattr(cur, "lastrowid", None) is not None else 0
+            box_id = (
+                int(cur.lastrowid) if getattr(cur, "lastrowid", None) is not None else 0
+            )
         finally:
             try:
                 cur.close()
@@ -336,3 +365,32 @@ class DataRepository:
             cur.close()
         except Exception:
             pass
+
+    def fetch_all_tickers(self) -> List[str]:
+        rows = self._fetchall(
+            """
+            SELECT DISTINCT ticker FROM historicals
+            """,
+            [],
+        )
+        return [row[0] for row in rows]
+
+    def get_wallet_amount(self) -> Decimal:
+        row = self._fetchone(
+            """
+            SELECT available_cash FROM wallet
+            """,
+            [],
+        )
+        if not row or row[0] is None:
+            raise Exception("Wallet amount not found")
+        return Decimal(row[0])
+
+    def create_trading_plan(self, plan: TradingPlan) -> None:
+        self._execute(
+            """
+            INSERT INTO trading_plan (ticker, order_type, qty)
+            VALUES (?, ?, ?)
+            """,
+            [plan.ticker, plan.order_type, plan.qty],
+        )
