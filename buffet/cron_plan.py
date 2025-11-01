@@ -4,7 +4,6 @@ from typing import List
 from api import GrowwApi
 from typing import Optional
 from tqdm import tqdm
-from models import *
 from datetime import date, timedelta
 import decision
 import config
@@ -30,11 +29,9 @@ def run(
     if today is None:
         today = date.today()
 
-    repo = DataRepository()
+    repo = DataRepository(connection)
     tomorrow = today + timedelta(days=1)
     todays_losses = dict()
-
-    tickers = repo.fetch_all_tickers()
 
     if api.is_trading_day(today):
         """
@@ -44,7 +41,6 @@ def run(
         pass
 
     if api.is_trading_day(tomorrow):
-        print("Fetching trading prices:")
         trading_prices = {
             ticker: api.get_trading_price(ticker) for ticker in tqdm(tickers)
         }
