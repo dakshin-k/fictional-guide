@@ -1,10 +1,10 @@
+import sqlite3
 from decimal import Decimal
 from typing import List
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Optional, Sequence
 import logging
-from django.db import connection
 
 
 @dataclass
@@ -48,43 +48,38 @@ class TradingPlan:
     qty: Optional[int] = None
 
 
+def _prep_sql(sql: str) -> str:
+    return sql.replace("?", "%s")
+
+
 class DataRepository:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
 
     def _get_cursor(self):
-        return connection.cursor()
-
-    def _prep_sql(self, sql: str) -> str:
-        return sql.replace("?", "%s")
+        return self.connection.cursor()
 
     def _fetchone(self, sql: str, params: Sequence[Any]):
         cur = self._get_cursor()
-        sql = self._prep_sql(sql)
+        sql = _prep_sql(sql)
         cur.execute(sql, params)
         try:
             return cur.fetchone()
         finally:
-            try:
-                cur.close()
-            except Exception:
-                pass
+            cur.close()
 
     def _fetchall(self, sql: str, params: Sequence[Any]):
         cur = self._get_cursor()
-        sql = self._prep_sql(sql)
+        sql = _prep_sql(sql)
         cur.execute(sql, params)
         try:
             return cur.fetchall()
         finally:
-            try:
-                cur.close()
-            except Exception:
-                pass
+            cur.close()
 
     def _execute(self, sql: str, params: Sequence[Any]):
         cur = self._get_cursor()
-        sql = self._prep_sql(sql)
+        sql = _prep_sql(sql)
         cur.execute(sql, params)
         return cur
 
@@ -255,10 +250,7 @@ class DataRepository:
             """,
             [ticker, streak],
         )
-        try:
-            cur.close()
-        except Exception:
-            pass
+        cur.close()
 
     # --- Darvas boxes helpers ---
     def get_earliest_day_close(self, ticker: str) -> Optional[tuple[date, float]]:
@@ -311,10 +303,7 @@ class DataRepository:
             """,
             [end_date, ticker],
         )
-        try:
-            cur.close()
-        except Exception:
-            pass
+        cur.close()
 
     def create_darvas_box(
         self, ticker: str, start_date: date, base_close: float, height_pct: float
@@ -332,15 +321,10 @@ class DataRepository:
             """,
             [ticker, start_date, float(min_price), float(max_price), float(base_close)],
         )
-        try:
-            box_id = (
-                int(cur.lastrowid) if getattr(cur, "lastrowid", None) is not None else 0
-            )
-        finally:
-            try:
-                cur.close()
-            except Exception:
-                pass
+        box_id = (
+            int(cur.lastrowid) if cur.lastrowid is not None else 0
+        )
+        cur.close()
         return DarvasBox(
             box_id=box_id,
             ticker=ticker,
@@ -361,10 +345,7 @@ class DataRepository:
             """,
             [end_date, ticker],
         )
-        try:
-            cur.close()
-        except Exception:
-            pass
+        cur.close()
 
     def fetch_all_tickers(self) -> List[str]:
         rows = self._fetchall(
