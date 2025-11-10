@@ -1,15 +1,17 @@
 import sqlite3
-from repository import TradingPlan
-from typing import List
-from api import GrowwApi
-from typing import Optional
-from tqdm import tqdm
 from datetime import date, timedelta
-import decision
+from typing import List
+from typing import Optional
+
+from tqdm import tqdm
+
 import config
-from repository import DataRepository
-from utils import max_affordable_buy_qty
+import decision
 from api import FinanceApi
+from api import GrowwApi
+from repository import DataRepository
+from repository import TradingPlan
+from utils import max_affordable_buy_qty
 
 
 def run(
@@ -33,6 +35,8 @@ def run(
     tomorrow = today + timedelta(days=1)
     todays_losses = dict()
 
+    print(f'>>> Planning for date {today}')
+
     if api.is_trading_day(today):
         """
         1. For each ticker, fetch and update historicals
@@ -42,16 +46,19 @@ def run(
 
     if api.is_trading_day(tomorrow):
         trading_prices = {
-            ticker: api.get_trading_price(ticker) for ticker in tqdm(tickers)
+            ticker: api.get_trading_price(tomorrow, ticker) for ticker in tqdm(tickers)
         }
 
         decisions = []
         for ticker in tickers:
+            open_price = trading_prices[ticker]
+            if open_price is None:
+                continue
             order_decision = decision.get_decision(
                 connection,
                 ticker,
                 str(tomorrow),
-                trading_prices[ticker],
+                open_price,
                 config.leader_lookback_days,
                 config.breakout_streak,
                 config.default_height_pct,
@@ -63,11 +70,10 @@ def run(
             if order_decision.decision == "BUY":
                 wallet_cash = repo.get_wallet_amount()
                 invest_cap = config.max_invest_per_stock
-                qty = max_affordable_buy_qty(
-                    wallet_cash, trading_prices[ticker], invest_cap
-                )
+                qty = max_affordable_buy_qty(wallet_cash, open_price, invest_cap)
                 repo.create_trading_plan(
                     TradingPlan(
+                        date=tomorrow,
                         ticker=ticker,
                         order_type="BUY",
                         qty=qty,
@@ -81,6 +87,7 @@ def run(
                         qty=None,
                     )
                 )
-            print(
-                f"Ticker: {ticker}, Decision: {order_decision.decision}, Stop Loss: {order_decision.stop_loss}"
-            )
+            if order_decision.decision != "NO_OP":
+                print(
+                    f"Ticker: {ticker}, Decision: {order_decision.decision}, Stop Loss: {order_decision.stop_loss}"
+                )

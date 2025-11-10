@@ -51,7 +51,7 @@ def get_decision(
     - BUY stop-loss equals the lower limit (min_price) of the current box at breakout.
     - When holding a position: also update trailing stop when highest high since entry rises.
     """
-    repo = DataRepository()
+    repo = DataRepository(con)
 
     # Maintain per-ticker Darvas height in-memory
     current_height = _height_pct_by_ticker.get(ticker, default_height_pct)

@@ -1,18 +1,25 @@
-from growwapi import GrowwAPI
-import pyotp
 from abc import ABC, abstractmethod
-from datetime import date
+from datetime import datetime, date
 from decimal import Decimal
+from typing import Optional
+
+import pyotp
+from growwapi import GrowwAPI
+
 import config
 
 
 class FinanceApi(ABC):
     @abstractmethod
-    def get_trading_price(self, ticker: str) -> Decimal:
+    def get_trading_price(self, date: datetime, ticker: str) -> Optional[Decimal]:
         pass
 
     @abstractmethod
-    def is_trading_day(self, date: date) -> bool:
+    def is_trading_day(self, date: datetime) -> bool:
+        pass
+
+    @abstractmethod
+    def buy(self, ticker: str, qty: int, today: date) -> Decimal:
         pass
 
 
@@ -25,7 +32,7 @@ class GrowwApi(FinanceApi):
         access_token = GrowwAPI.get_access_token(api_key=api_key, totp=totp)
         self.growwapi = GrowwAPI(str(access_token))
 
-    def get_trading_price(self, ticker: str) -> Decimal:
+    def get_trading_price(self, date: datetime, ticker: str) -> Optional[Decimal]:
         return Decimal(
             self.growwapi.get_quote(
                 exchange=self.growwapi.EXCHANGE_NSE,
@@ -34,6 +41,8 @@ class GrowwApi(FinanceApi):
             )["ohlc"]["open"]
         )
 
-    def is_trading_day(self, date: date) -> bool:
-        # TODO
-        return True
+    def is_trading_day(self, date: datetime) -> bool:
+        raise NotImplementedError()
+
+    def buy(self, ticker: str, qty: int, today: date) -> Decimal:
+        raise NotImplementedError()

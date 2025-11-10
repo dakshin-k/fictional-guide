@@ -1,5 +1,4 @@
 CREATE TABLE IF NOT EXISTS historicals (
-    id int primary key,
     trade_date DATE NOT NULL,
     ticker VARCHAR NOT NULL,
     close DECIMAL(18,4),
@@ -61,3 +60,10 @@ CREATE TABLE IF NOT EXISTS darvas_boxes (
     base_close DECIMAL(18,4) NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
+
+CREATE TABLE IF NOT EXISTS trading_plan(
+    date DATE NOT NULL,
+    ticker VARCHAR NOT NULL,
+    order_type VARCHAR NOT NULL,
+    qty BIGINT NOT NULL
+)

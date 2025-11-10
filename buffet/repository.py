@@ -18,6 +18,7 @@ class PriceData:
 
 @dataclass
 class ActiveTrade:
+    ticker: str
     qty_owned: int
     buy_price: Optional[float]
     stop_loss_amt: Optional[float]
@@ -43,13 +44,23 @@ class DarvasBox:
 
 @dataclass
 class TradingPlan:
+    date: date
     ticker: str
     order_type: str
     qty: Optional[int] = None
 
+    @staticmethod
+    def from_row(row: Sequence[Any]) -> "TradingPlan":
+        return TradingPlan(
+            date=row[0],
+            ticker=row[1],
+            order_type=row[2],
+            qty=int(row[3]),
+        )
+
 
 def _prep_sql(sql: str) -> str:
-    return sql.replace("?", "%s")
+    return sql
 
 
 class DataRepository:
@@ -198,7 +209,19 @@ class DataRepository:
         qty = int(row[0]) if row[0] is not None else 0
         buy = float(row[1]) if row[1] is not None else None
         stop = float(row[2]) if row[2] is not None else None
-        return ActiveTrade(qty_owned=qty, buy_price=buy, stop_loss_amt=stop)
+        return ActiveTrade(
+            ticker=ticker, qty_owned=qty, buy_price=buy, stop_loss_amt=stop
+        )
+
+    def add_active_trade(self, trade: ActiveTrade) -> None:
+        cur = self._execute(
+            """
+            INSERT OR REPLACE INTO active_trades (ticker, qty_owned, buy_price, stop_loss_amt)
+            VALUES (?, ?, ?, ?)
+            """,
+            [trade.ticker, trade.qty_owned, trade.buy_price, trade.stop_loss_amt],
+        )
+        cur.close()
 
     def get_last_buy_date(self, ticker: str) -> Optional[date]:
         row = self._fetchone(
@@ -321,9 +344,7 @@ class DataRepository:
             """,
             [ticker, start_date, float(min_price), float(max_price), float(base_close)],
         )
-        box_id = (
-            int(cur.lastrowid) if cur.lastrowid is not None else 0
-        )
+        box_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
         cur.close()
         return DarvasBox(
             box_id=box_id,
@@ -370,8 +391,8 @@ class DataRepository:
     def create_trading_plan(self, plan: TradingPlan) -> None:
         self._execute(
             """
-            INSERT INTO trading_plan (ticker, order_type, qty)
-            VALUES (?, ?, ?)
+            INSERT INTO trading_plan (date, ticker, order_type, qty)
+            VALUES (?, ?, ?, ?)
             """,
-            [plan.ticker, plan.order_type, plan.qty],
+            [plan.date, plan.ticker, plan.order_type, plan.qty],
         )
