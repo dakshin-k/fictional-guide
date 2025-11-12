@@ -1,5 +1,6 @@
 from datetime import datetime, date as date_type
 from decimal import Decimal
+from functools import lru_cache
 from typing import Optional
 
 from api import FinanceApi
@@ -11,15 +12,17 @@ class MockFinanceApi(FinanceApi):
     def __init__(self):
         self.conn = open_historical_db()
 
-    def get_trading_price(self, date: date_type, ticker: str) -> Optional[Decimal]:
+    @lru_cache(maxsize=10)
+    def get_all_open_prices(self, date: date_type) -> dict[str, Decimal]:
         sql = '''
-        select open from historicals
-        where ticker = ? and trade_date = ?
+        select ticker, open from historicals
+        where trade_date = ?
         '''
-        row = self.conn.execute(sql, (ticker, date.strftime('%Y-%m-%d'))).fetchone()
-        if not row or not row[0]:
-            return None
-        return Decimal(row[0])
+        rows = self.conn.execute(sql, (date.strftime('%Y-%m-%d'),)).fetchall()
+        return {row[0]: Decimal(row[1]) if row[1] else None for row in rows}
+
+    def get_trading_price(self, date: date_type, ticker: str) -> Optional[Decimal]:
+        return self.get_all_open_prices(date)[ticker]
 
     def is_trading_day(self, date: datetime) -> bool:
         sql = '''
@@ -36,6 +39,6 @@ class MockFinanceApi(FinanceApi):
 
         cost = price * Decimal(qty)
         return cost + calculate_transaction_charges(cost)
-    
+
     def update_stop_loss(self, ticker: str, stop_loss: Decimal) -> None:
         pass
