@@ -77,14 +77,17 @@ def run(
                         ticker=ticker,
                         order_type="BUY",
                         qty=qty,
+                        stop_loss=order_decision.stop_loss or 0,
                     )
                 )
             elif order_decision.decision == "UPDATE_STOP_LOSS":
                 repo.create_trading_plan(
                     TradingPlan(
+                        date=tomorrow,
                         ticker=ticker,
                         order_type="UPDATE_STOP_LOSS",
                         qty=None,
+                        stop_loss=order_decision.stop_loss or 0,
                     )
                 )
             if order_decision.decision != "NO_OP":

@@ -19,9 +19,9 @@ class PriceData:
 @dataclass
 class ActiveTrade:
     ticker: str
-    qty_owned: int
-    buy_price: Optional[float]
-    stop_loss_amt: Optional[float]
+    buy_cost: float
+    buy_date: date
+    stop_loss: Optional[float] = None
 
 
 @dataclass
@@ -47,6 +47,7 @@ class TradingPlan:
     date: date
     ticker: str
     order_type: str
+    stop_loss: float
     qty: Optional[int] = None
 
     @staticmethod
@@ -56,6 +57,7 @@ class TradingPlan:
             ticker=row[1],
             order_type=row[2],
             qty=int(row[3]),
+            stop_loss=float(row[4]),
         )
 
 
@@ -198,7 +200,7 @@ class DataRepository:
     def get_active_trade(self, ticker: str) -> Optional[ActiveTrade]:
         row = self._fetchone(
             """
-            SELECT qty_owned, buy_price, stop_loss_amt
+            SELECT buy_cost, buy_date, stop_loss
             FROM active_trades
             WHERE ticker = ?
             """,
@@ -206,20 +208,32 @@ class DataRepository:
         )
         if not row:
             return None
-        qty = int(row[0]) if row[0] is not None else 0
-        buy = float(row[1]) if row[1] is not None else None
-        stop = float(row[2]) if row[2] is not None else None
+
         return ActiveTrade(
-            ticker=ticker, qty_owned=qty, buy_price=buy, stop_loss_amt=stop
+            ticker=ticker,
+            buy_cost=float(row[0]),
+            buy_date=date.fromisoformat(row[1]),
+            stop_loss=float(row[2])
         )
 
     def add_active_trade(self, trade: ActiveTrade) -> None:
         cur = self._execute(
             """
-            INSERT OR REPLACE INTO active_trades (ticker, qty_owned, buy_price, stop_loss_amt)
+            INSERT OR REPLACE INTO active_trades (ticker, buy_cost, buy_date, stop_loss)
             VALUES (?, ?, ?, ?)
             """,
-            [trade.ticker, trade.qty_owned, trade.buy_price, trade.stop_loss_amt],
+            [trade.ticker, trade.buy_cost, trade.buy_date.isoformat(), trade.stop_loss],
+        )
+        cur.close()
+
+    def update_trade_stop_loss(self, ticker: str, stop_loss: float) -> None:
+        cur = self._execute(
+            """
+            UPDATE active_trades
+            SET stop_loss = ?
+            WHERE ticker = ?
+            """,
+            [stop_loss, ticker],
         )
         cur.close()
 
@@ -391,8 +405,8 @@ class DataRepository:
     def create_trading_plan(self, plan: TradingPlan) -> None:
         self._execute(
             """
-            INSERT INTO trading_plan (date, ticker, order_type, qty)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO trading_plan (date, ticker, order_type, qty, stop_loss)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            [plan.date, plan.ticker, plan.order_type, plan.qty],
+            [plan.date, plan.ticker, plan.order_type, plan.qty, plan.stop_loss],
         )

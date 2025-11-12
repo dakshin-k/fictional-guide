@@ -22,6 +22,10 @@ class FinanceApi(ABC):
     def buy(self, ticker: str, qty: int, today: date) -> Decimal:
         pass
 
+    @abstractmethod
+    def update_stop_loss(self, ticker: str, stop_loss: Decimal) -> None:
+        pass
+
 
 class GrowwApi(FinanceApi):
     def __init__(self):
@@ -45,4 +49,7 @@ class GrowwApi(FinanceApi):
         raise NotImplementedError()
 
     def buy(self, ticker: str, qty: int, today: date) -> Decimal:
+        raise NotImplementedError()
+        
+    def update_stop_loss(self, ticker: str, stop_loss: Decimal) -> None:
         raise NotImplementedError()

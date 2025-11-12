@@ -36,3 +36,6 @@ class MockFinanceApi(FinanceApi):
 
         cost = price * Decimal(qty)
         return cost + calculate_transaction_charges(cost)
+    
+    def update_stop_loss(self, ticker: str, stop_loss: Decimal) -> None:
+        pass

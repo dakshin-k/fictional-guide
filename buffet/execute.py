@@ -23,18 +23,22 @@ def execute_plan(
     repo = DataRepository(db)
 
     cursor = db.cursor()
-    cursor.execute("SELECT * FROM trading_plan WHERE order_type = 'BUY' and date = ?", (today,))
+    cursor.execute("SELECT * FROM trading_plan WHERE date = ?", (today,))
     plans = map(TradingPlan.from_row, cursor.fetchall())
     for plan in plans:
-        if plan.qty is None:
-            print(f"ERROR: No quantity specified for {plan.ticker} in trading plan")
-            continue
-        cost = api.buy(plan.ticker, int(plan.qty), today)
-        wallet = update_wallet(db, -cost)
-        repo.add_active_trade(ActiveTrade(
-            ticker=plan.ticker,
-            qty_owned=plan.qty,
-            cost=cost,
-            stop_loss_amt=plan.,
-        ))
+        if plan.order_type == 'BUY':
+            if plan.qty is None:
+                print(f"ERROR: No quantity specified for {plan.ticker} in trading plan")
+                continue
+            cost = api.buy(plan.ticker, int(plan.qty), today)
+            wallet = update_wallet(db, -cost)
+            repo.add_active_trade(ActiveTrade(
+                ticker=plan.ticker,
+                buy_cost=float(cost),
+                buy_date=today,
+                stop_loss=float(plan.stop_loss) if plan.stop_loss is not None else None,
+            ))
+        elif plan.order_type == 'UPDATE_STOP_LOSS':
+            api.update_stop_loss(plan.ticker, Decimal(plan.stop_loss))
+            repo.update_trade_stop_loss(plan.ticker, float(plan.stop_loss))
         print(f"Bought shares of {plan.ticker}. Wallet: {wallet}")

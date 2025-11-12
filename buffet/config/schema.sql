@@ -10,9 +10,9 @@ CREATE TABLE IF NOT EXISTS historicals (
 
 CREATE TABLE IF NOT EXISTS active_trades (
     ticker VARCHAR NOT NULL PRIMARY KEY,
-    qty_owned BIGINT NOT NULL,
-    buy_price DECIMAL(18,4) NOT NULL,
-    stop_loss_amt DECIMAL(18,4)
+    buy_cost DECIMAL(18,4) NOT NULL,
+    buy_date DATE NOT NULL,
+    stop_loss DECIMAL(18,4)
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -65,5 +65,6 @@ CREATE TABLE IF NOT EXISTS trading_plan(
     date DATE NOT NULL,
     ticker VARCHAR NOT NULL,
     order_type VARCHAR NOT NULL,
-    qty BIGINT NOT NULL
+    qty BIGINT NOT NULL,
+    stop_loss DECIMAL(18,4) NOT NULL
 )
