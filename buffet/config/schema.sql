@@ -68,4 +68,8 @@ CREATE TABLE IF NOT EXISTS trading_plan(
     order_type VARCHAR NOT NULL,
     qty BIGINT,
     stop_loss DECIMAL(18,4) NOT NULL
-)
+);
+
+CREATE INDEX IF NOT EXISTS idx_historicals_ticker_date ON historicals(ticker, trade_date);
+CREATE INDEX IF NOT EXISTS idx_historicals_ticker_date_desc ON historicals(ticker, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_darvas_boxes_ticker_active ON darvas_boxes(ticker, is_active);
