@@ -21,30 +21,41 @@ def run(
     api: Optional[FinanceApi] = None,
 ):
     """
-    1. Get today's date
-    2. If today was a trading day, update historicals and portfolio
-    3. If tomorrow is a trading, generate decision plan and send email
+    This runs every evening to evaluate the day's work and plan for tomorrow.
+    1. If today was a trading day, update historicals and portfolio
+    2. If tomorrow is a trading day, generate decision plan and send email
     """
 
-    if api is None:
-        api = GrowwApi()
     if today is None:
         today = date.today()
+    if api is None:
+        api = GrowwApi(today)
 
     repo = DataRepository(connection)
     tomorrow = today + timedelta(days=1)
     todays_losses = dict()
 
-    print(f'>>> Planning for date {today}')
-
     if api.is_trading_day(today):
+        print(f">> Checking stop loss triggers for {today}")
         """
-        1. For each ticker, fetch and update historicals
-        2. For each pending sell order, check status and update order and portfolio. Make note of losses for the decision engine
+        1. For each pending sell order, check status and update order and portfolio. Make note of losses for the decision engine
         """
-        pass
+        for trade in repo.get_active_trades():
+            sell_status = api.get_stop_loss_status(trade)
+            if sell_status.triggered:
+                if sell_status.amount is None:
+                    raise Exception(f"Stop loss triggered for {trade} but amount is None")
+                print(f">>> Stop loss triggered for {trade.ticker}: {sell_status.amount}")
+                todays_losses[trade.ticker] = True
+                repo.update_wallet(sell_status.amount)
+                repo.remove_active_trade(trade)
+    else:
+        print('Skipping SL check as not a trading day')
+
+
 
     if api.is_trading_day(tomorrow):
+        print(f">> Planning buys for {tomorrow}")
         trading_prices = {
             ticker: api.get_trading_price(tomorrow, ticker) for ticker in tqdm(tickers)
         }
@@ -91,6 +102,9 @@ def run(
                     )
                 )
             if order_decision.decision != "NO_OP":
-                print(
-                    f"Ticker: {ticker}, Decision: {order_decision.decision}, Stop Loss: {order_decision.stop_loss}"
-                )
+                pass
+                # print(
+                #     f"Ticker: {ticker}, Decision: {order_decision.decision}, Stop Loss: {order_decision.stop_loss}"
+                # )
+    else:
+        print(f"Skip planning as {tomorrow} not a trading day")

@@ -74,14 +74,13 @@ def get_decision(
         box = repo.create_darvas_box(ticker, earliest_date, earliest_close, current_height)
 
     active = repo.get_active_trade(ticker)
-    if active and active.qty_owned > 0:
+    if active and active.qty > 0:
         if open_price > box.max_price:
             repo.deactivate_active_darvas_box(ticker, prev_day if prev_day else box.start_date)
             new_box = repo.create_darvas_box(ticker, trade_date, float(prev_closing), current_height)
             new_stop = new_box.min_price
-            current_stop = active.stop_loss_amt if active.stop_loss_amt is not None else 0.0
-            if new_stop > current_stop:
-                logger.debug(f"{trade_date}: [UPDATE_STOP_LOSS] Price above box; new stop {new_stop:.4f} > current {current_stop:.4f} for {ticker}")
+            if new_stop > active.stop_loss:
+                logger.debug(f"{trade_date}: [UPDATE_STOP_LOSS] Price above box; new stop {new_stop:.4f} > current {active.stop_loss:.4f} for {ticker}")
                 return Decision("UPDATE_STOP_LOSS", stop_loss=round(new_stop, 4))
         return Decision("NO_OP")
 

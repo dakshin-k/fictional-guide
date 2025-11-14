@@ -1,10 +1,10 @@
+import logging
 import sqlite3
-from decimal import Decimal
-from typing import List
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 from typing import Any, Optional, Sequence
-import logging
+from typing import List
 
 
 @dataclass
@@ -21,7 +21,8 @@ class ActiveTrade:
     ticker: str
     buy_cost: float
     buy_date: date
-    stop_loss: Optional[float] = None
+    stop_loss: float
+    qty: int
 
 
 @dataclass
@@ -56,7 +57,7 @@ class TradingPlan:
             date=row[0],
             ticker=row[1],
             order_type=row[2],
-            qty=int(row[3]),
+            qty=None if row[3] is None else int(row[3]),
             stop_loss=float(row[4]),
         )
 
@@ -197,10 +198,29 @@ class DataRepository:
             return None
         return float(row[0])
 
+    def get_active_trades(self) -> List[ActiveTrade]:
+        rows = self._fetchall(
+            """
+            SELECT ticker, buy_cost, buy_date, stop_loss, quantity
+            FROM active_trades
+            """,
+            [],
+        )
+        return [
+            ActiveTrade(
+                ticker=row[0],
+                buy_cost=float(row[1]),
+                buy_date=date.fromisoformat(row[2].split("T")[0]),
+                stop_loss=float(row[3]),
+                qty=int(row[4]),
+            )
+            for row in rows
+        ]
+
     def get_active_trade(self, ticker: str) -> Optional[ActiveTrade]:
         row = self._fetchone(
             """
-            SELECT buy_cost, buy_date, stop_loss
+            SELECT buy_cost, buy_date, stop_loss, quantity
             FROM active_trades
             WHERE ticker = ?
             """,
@@ -212,17 +232,24 @@ class DataRepository:
         return ActiveTrade(
             ticker=ticker,
             buy_cost=float(row[0]),
-            buy_date=date.fromisoformat(row[1]),
-            stop_loss=float(row[2])
+            buy_date=date.fromisoformat(row[1].split("T")[0]),
+            stop_loss=float(row[2]),
+            qty=int(row[3]),
         )
 
     def add_active_trade(self, trade: ActiveTrade) -> None:
         cur = self._execute(
             """
-            INSERT OR REPLACE INTO active_trades (ticker, buy_cost, buy_date, stop_loss)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO active_trades (ticker, buy_cost, buy_date, stop_loss, quantity)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            [trade.ticker, trade.buy_cost, trade.buy_date.isoformat(), trade.stop_loss],
+            [
+                trade.ticker,
+                trade.buy_cost,
+                trade.buy_date.isoformat(),
+                trade.stop_loss,
+                trade.qty,
+            ],
         )
         cur.close()
 
@@ -234,6 +261,16 @@ class DataRepository:
             WHERE ticker = ?
             """,
             [stop_loss, ticker],
+        )
+        cur.close()
+
+    def remove_active_trade(self, trade: ActiveTrade) -> None:
+        cur = self._execute(
+            """
+            DELETE FROM active_trades
+            WHERE ticker = ?
+            """,
+            [trade.ticker],
         )
         cur.close()
 
@@ -401,6 +438,15 @@ class DataRepository:
         if not row or row[0] is None:
             raise Exception("Wallet amount not found")
         return Decimal(row[0])
+
+    def update_wallet(self, amount: Decimal) -> Decimal:
+        self._execute(
+            """
+            UPDATE wallet SET available_cash = available_cash + ?
+            """,
+            [float(amount)],
+        )
+        return self.get_wallet_amount()
 
     def create_trading_plan(self, plan: TradingPlan) -> None:
         self._execute(
