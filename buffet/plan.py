@@ -82,6 +82,9 @@ def run(
                 wallet_cash = repo.get_wallet_amount()
                 invest_cap = config.max_invest_per_stock
                 qty = max_affordable_buy_qty(wallet_cash, open_price, invest_cap)
+                if qty == 0:
+                    print(f"Cannot buy {ticker} @ {round(open_price)} -> wallet: {round(wallet_cash)}")
+                    continue
                 repo.create_trading_plan(
                     TradingPlan(
                         date=tomorrow,

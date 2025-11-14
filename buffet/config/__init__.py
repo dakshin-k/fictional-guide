@@ -1,6 +1,6 @@
 import os
 
-
+starting_cash = 1_00_000
 leader_lookback_days = 365
 breakout_streak: int = 1
 default_height_pct: float = 0.01
